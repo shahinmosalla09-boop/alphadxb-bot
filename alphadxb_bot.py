@@ -77,28 +77,24 @@ def get_fear_greed():
 # ============================================
 def get_ohlc_data(symbol="BTCUSDT", interval="240", limit=60):
     try:
-        url = "https://api.bybit.com/v5/market/kline"
-        params = {"category": "linear", "symbol": symbol, "interval": interval, "limit": limit}
+        url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc"
+        params = {"vs_currency": "usd", "days": "7"}
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
-        if data.get("retCode") == 0:
-            candles = data["result"]["list"]
-            candles.reverse()
-            ohlc = []
-            for c in candles:
-                ohlc.append({
-                    "time": datetime.fromtimestamp(int(c[0]) / 1000),
-                    "open": float(c[1]),
-                    "high": float(c[2]),
-                    "low": float(c[3]),
-                    "close": float(c[4]),
-                    "volume": float(c[5])
-                })
-            return ohlc
+        ohlc = []
+        for c in data[-limit:]:
+            ohlc.append({
+                "time": datetime.fromtimestamp(c[0] / 1000),
+                "open": float(c[1]),
+                "high": float(c[2]),
+                "low": float(c[3]),
+                "close": float(c[4]),
+                "volume": 0
+            })
+        return ohlc
     except Exception as e:
         print(f"❌ OHLC error: {e}")
-    return None
-
+        return None
 # ============================================
 # محاسبه Support و Resistance
 # ============================================
