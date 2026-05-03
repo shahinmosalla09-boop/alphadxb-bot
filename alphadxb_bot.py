@@ -35,10 +35,20 @@ def send_photo(channel, photo_bytes, caption=""):
 
 def get_price(symbol):
     try:
-        url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
-        r = requests.get(url, timeout=10)
+        coin_map = {
+            "BTCUSDT": "bitcoin",
+            "ETHUSDT": "ethereum", 
+            "BNBUSDT": "binancecoin",
+            "SOLUSDT": "solana"
+        }
+        coin_id = coin_map.get(symbol, "bitcoin")
+        url = f"https://api.coingecko.com/api/v3/simple/price"
+        params = {"ids": coin_id, "vs_currencies": "usd", "include_24hr_change": "true"}
+        r = requests.get(url, params=params, timeout=15)
         d = r.json()
-        return float(d["lastPrice"]), float(d["priceChangePercent"])
+        price = d[coin_id]["usd"]
+        change = d[coin_id]["usd_24h_change"]
+        return float(price), float(change)
     except Exception as e:
         print(f"❌ Price error {symbol}: {e}")
         return None, None
@@ -53,9 +63,9 @@ def get_fear_greed():
 
 def get_ohlc(symbol="BTCUSDT", interval="4h", limit=60):
     try:
-        url = "https://api.binance.com/api/v3/klines"
-        params = {"symbol": symbol, "interval": interval, "limit": limit}
-        r = requests.get(url, params=params, timeout=10)
+        url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc"
+        params = {"vs_currency": "usd", "days": "7"}
+        r = requests.get(url, params=params, timeout=15)
         data = r.json()
         ohlc = []
         for c in data:
@@ -65,9 +75,9 @@ def get_ohlc(symbol="BTCUSDT", interval="4h", limit=60):
                 "high": float(c[2]),
                 "low": float(c[3]),
                 "close": float(c[4]),
-                "volume": float(c[5])
+                "volume": 0
             })
-        return ohlc
+        return ohlc[-limit:]
     except Exception as e:
         print(f"❌ OHLC error: {e}")
         return None
