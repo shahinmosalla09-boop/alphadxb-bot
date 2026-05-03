@@ -36,12 +36,16 @@ def send_message(channel, text):
 def send_photo(channel, photo_bytes, caption=""):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
     try:
-        r = requests.post(url, data={"chat_id": channel, "caption": caption, "parse_mode": "HTML"},
-                         files={"photo": ("chart.png", photo_bytes, "image/png")}, timeout=30)
-        print(f"✅ Chart sent to {channel}: {r.status_code}")
+        response = requests.post(
+            url,
+            data={"chat_id": channel, "caption": caption, "parse_mode": "HTML"},
+            files={"photo": ("chart.png", photo_bytes, "image/png")},
+            timeout=30
+        )
+        print(f"✅ Chart sent to {channel}: {response.status_code}")
+        print(f"Response: {response.text[:200]}")
     except Exception as e:
         print(f"❌ Error sending chart: {e}")
-
 # ============================================
 # گرفتن قیمت‌ها
 # ============================================
