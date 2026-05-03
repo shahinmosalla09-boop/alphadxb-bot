@@ -36,23 +36,21 @@ def send_photo(channel, photo_bytes, caption=""):
 def get_price(symbol):
     try:
         coin_map = {
-            "BTCUSDT": "bitcoin",
-            "ETHUSDT": "ethereum", 
-            "BNBUSDT": "binancecoin",
-            "SOLUSDT": "solana"
+            "BTCUSDT": "BTC",
+            "ETHUSDT": "ETH",
+            "BNBUSDT": "BNB",
+            "SOLUSDT": "SOL"
         }
-        coin_id = coin_map.get(symbol, "bitcoin")
-        url = f"https://api.coingecko.com/api/v3/simple/price"
-        params = {"ids": coin_id, "vs_currencies": "usd", "include_24hr_change": "true"}
-        r = requests.get(url, params=params, timeout=15)
+        coin = coin_map.get(symbol, "BTC")
+        url = f"https://min-api.cryptocompare.com/data/pricemultifull?fsyms={coin}&tsyms=USD"
+        r = requests.get(url, timeout=15)
         d = r.json()
-        price = d[coin_id]["usd"]
-        change = d[coin_id]["usd_24h_change"]
+        price = d["RAW"][coin]["USD"]["PRICE"]
+        change = d["RAW"][coin]["USD"]["CHANGEPCT24HOUR"]
         return float(price), float(change)
     except Exception as e:
         print(f"❌ Price error {symbol}: {e}")
         return None, None
-
 def get_fear_greed():
     try:
         r = requests.get("https://api.alternative.me/fng/", timeout=10)
