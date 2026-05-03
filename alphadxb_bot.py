@@ -15,7 +15,7 @@ from io import BytesIO
 # تنظیمات
 # ============================================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-PUBLIC_CHANNEL = "-1003792486102"
+PUBLIC_CHANNEL = "@AlphaDXBcrypto"
 VIP_CHANNEL = "@AlphaDXBcryptoPRO"
 
 # ============================================
