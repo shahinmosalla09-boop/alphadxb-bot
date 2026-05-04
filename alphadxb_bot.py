@@ -24,13 +24,17 @@ def send_message(channel, text):
 def send_photo(channel, photo_bytes, caption=""):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
     try:
-        r = requests.post(url,
-            data={"chat_id": channel, "caption": caption, "parse_mode": "HTML"},
-            files={"photo": ("chart.png", photo_bytes, "image/png")},
-            timeout=30)
-        print(f"✅ Photo: {r.status_code} {r.text[:100]}")
+        import base64
+        files = {"photo": ("chart.png", photo_bytes, "image/png")}
+        data = {"chat_id": channel, "caption": caption, "parse_mode": "HTML"}
+        r = requests.post(url, files=files, data=data, timeout=60)
+        print(f"✅ Photo: {r.status_code} {r.text[:200]}")
+        if r.status_code != 200:
+            print("Falling back to text message...")
+            send_message(channel, caption)
     except Exception as e:
         print(f"❌ Photo error: {e}")
+        send_message(channel, caption)
 
 def get_prices():
     apis = [
