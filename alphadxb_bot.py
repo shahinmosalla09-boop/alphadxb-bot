@@ -2,6 +2,7 @@ import requests
 import schedule
 import time
 import os
+import base64
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -9,7 +10,7 @@ from datetime import datetime
 from io import BytesIO
 
 TELEGRAM_TOKEN = "8774593158:AAEtqggo7ReinWqO9rkUw6v74jA9HCEJcA4"
-print(f"TOKEN CHECK: {TELEGRAM_TOKEN[:20]}")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 PUBLIC_CHANNEL = "@AlphaDXBcrypto"
 VIP_CHANNEL = "@AlphaDXBcryptoPRO"
 
@@ -25,13 +26,11 @@ def send_message(channel, text):
 def send_photo(channel, photo_bytes, caption=""):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
     try:
-        r = requests.post(
-            url,
+        r = requests.post(url,
             files={"photo": ("chart.png", BytesIO(photo_bytes), "image/png")},
             data={"chat_id": channel, "caption": caption, "parse_mode": "HTML"},
-            timeout=60
-        )
-        print(f"✅ Photo: {r.status_code} {r.text[:200]}")
+            timeout=60)
+        print(f"✅ Photo: {r.status_code}")
         if r.status_code != 200:
             send_message(channel, caption)
     except Exception as e:
@@ -39,30 +38,8 @@ def send_photo(channel, photo_bytes, caption=""):
         send_message(channel, caption)
 
 def get_prices():
-    apis = [
-        "https://api.coinbase.com/v2/exchange-rates?currency=BTC",
-    ]
-    # روش اول - Coinbase
     try:
-        r = requests.get("https://api.coinbase.com/v2/exchange-rates?currency=BTC", timeout=10)
-        btc_usd = 1 / float(r.json()["data"]["rates"]["USD"]) * 1000000
-        btc = float(r.json()["data"]["rates"]["USD"])
-        btc = 1/btc * 100000000
-        # ساده‌تر:
-        rates = r.json()["data"]["rates"]
-        btc_price = 1 / float(rates["BTC"]) if "BTC" in rates else None
-        print(f"Coinbase raw: {list(rates.items())[:5]}")
-    except Exception as e:
-        print(f"Coinbase error: {e}")
-
-    # روش دوم - Kraken
-    try:
-        symbols = {
-            "BTC": "XXBTZUSD",
-            "ETH": "XETHZUSD",
-            "SOL": "SOLUSD",
-            "BNB": "BNBUSD"
-        }
+        symbols = {"BTC": "XXBTZUSD", "ETH": "XETHZUSD", "SOL": "SOLUSD", "BNB": "BNBUSD"}
         prices = {}
         for coin, pair in symbols.items():
             r = requests.get(f"https://api.kraken.com/0/public/Ticker?pair={pair}", timeout=10)
@@ -72,26 +49,10 @@ def get_prices():
                 key = list(result.keys())[0]
                 price = float(result[key]["c"][0])
                 prices[coin] = price
-                print(f"✅ {coin}: ${price:,.2f}")
-        if len(prices) >= 3:
-            return prices
+        return prices if len(prices) >= 3 else None
     except Exception as e:
-        print(f"Kraken error: {e}")
-
-    # روش سوم - Mexc
-    try:
-        pairs = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "BNB": "BNBUSDT", "SOL": "SOLUSDT"}
-        prices = {}
-        for coin, pair in pairs.items():
-            r = requests.get(f"https://api.mexc.com/api/v3/ticker/price?symbol={pair}", timeout=10)
-            prices[coin] = float(r.json()["price"])
-            print(f"✅ MEXC {coin}: ${prices[coin]:,.2f}")
-        if len(prices) >= 3:
-            return prices
-    except Exception as e:
-        print(f"MEXC error: {e}")
-
-    return None
+        print(f"❌ Price error: {e}")
+        return None
 
 def get_fear_greed():
     try:
@@ -119,10 +80,9 @@ def get_ohlc():
                     "close": float(c[4]),
                     "volume": float(c[6])
                 })
-            print(f"✅ Got {len(ohlc)} candles from Kraken")
             return ohlc
     except Exception as e:
-        print(f"OHLC error: {e}")
+        print(f"❌ OHLC error: {e}")
     return None
 
 def find_levels(ohlc):
@@ -188,6 +148,53 @@ def create_chart(ohlc, supports, resistances):
     plt.close()
     return buf.read()
 
+def get_ai_analysis(chart_bytes, price, supports, resistances, fg_value, fg_label):
+    try:
+        chart_b64 = base64.standard_b64encode(chart_bytes).decode("utf-8")
+        prompt = f"""You are a professional crypto analyst. Analyze this BTC/USDT 4H chart and write a short market update for a Telegram channel.
+
+Current data:
+- BTC Price: ${price:,.0f}
+- Support levels: {', '.join([f'${s:,.0f}' for s in supports])}
+- Resistance levels: {', '.join([f'${r:,.0f}' for r in resistances])}
+- Market Sentiment: {fg_label} ({fg_value})
+
+Write a concise analysis in English (max 150 words) including:
+1. Current market bias (bullish/bearish/neutral)
+2. Key levels to watch
+3. Two scenarios (bull and bear case)
+4. One actionable insight
+
+Keep it professional, clear and suitable for crypto traders."""
+
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            },
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 300,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": chart_b64}},
+                        {"type": "text", "text": prompt}
+                    ]
+                }]
+            },
+            timeout=30
+        )
+        data = response.json()
+        analysis = data["content"][0]["text"]
+        print(f"✅ AI Analysis done")
+        return analysis
+    except Exception as e:
+        print(f"❌ AI error: {e}")
+        return None
+
 def price_arrow(change):
     return f"📈 +{change:.2f}%" if change >= 0 else f"📉 {change:.2f}%"
 
@@ -196,8 +203,7 @@ def morning_update():
     prices = get_prices()
     fg_val, fg_label = get_fear_greed()
     if not prices:
-        print("❌ Could not get prices")
-        send_message(PUBLIC_CHANNEL, "Good morning! Market update coming soon. Stay tuned!")
+        print("Could not get prices")
         return
     date_str = datetime.now().strftime("%b %d, %Y")
     btc = prices.get("BTC", 0)
@@ -208,15 +214,14 @@ def morning_update():
     if ohlc:
         supports, resistances = find_levels(ohlc)
         chart = create_chart(ohlc, supports, resistances)
-        if fg_val < 30:
-            bias = "Extreme Fear - possible bounce"
-            scenario = f"If holds above ${supports[0]:,.0f} -> target ${resistances[0]:,.0f}\nIf breaks ${supports[0]:,.0f} -> next ${supports[1]:,.0f}" if len(supports)>1 else f"If holds above ${supports[0]:,.0f} -> target ${resistances[0]:,.0f}"
-        elif fg_val > 70:
-            bias = "Greed - watch for pullback"
-            scenario = f"If breaks ${resistances[0]:,.0f} -> strong move up\nIf rejects -> pullback to ${supports[0]:,.0f}"
-        else:
-            bias = "Neutral - wait for breakout"
-            scenario = f"Break above ${resistances[0]:,.0f} -> Bullish\nBreak below ${supports[0]:,.0f} -> Bearish"
+        analysis = get_ai_analysis(chart, btc, supports, resistances, fg_val, fg_label)
+        if not analysis:
+            if fg_val < 30:
+                analysis = f"Market in Extreme Fear. Watch support at ${supports[0]:,.0f}. Potential bounce setup."
+            elif fg_val > 70:
+                analysis = f"Market Greedy. Resistance at ${resistances[0]:,.0f}. Watch for pullback to ${supports[0]:,.0f}."
+            else:
+                analysis = f"Neutral market. Break above ${resistances[0]:,.0f} = bullish. Break below ${supports[0]:,.0f} = bearish."
         caption = f"""GM! AlphaDXB Morning Update
 {date_str}
 
@@ -225,15 +230,10 @@ ETH: ${eth:,.0f}
 BNB: ${bnb:,.0f}
 SOL: ${sol:,.2f}
 
-Market Sentiment: {fg_label.upper()} ({fg_val})
+Sentiment: {fg_label.upper()} ({fg_val})
 
-BTC Analysis 4H:
-Resistance: ${resistances[0]:,.0f}
-Support: ${supports[0]:,.0f}
-Bias: {bias}
-
-Scenarios:
-{scenario}
+BTC 4H Analysis:
+{analysis}
 
 Full signals -> {VIP_CHANNEL}
 #crypto #bitcoin #dubai #AlphaDXB"""
