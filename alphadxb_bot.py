@@ -10,7 +10,7 @@ from datetime import datetime
 from io import BytesIO
 
 TELEGRAM_TOKEN = "8774593158:AAEtqggo7ReinWqO9rkUw6v74jA9HCEJcA4"
-ANTHROPIC_API_KEY = "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"
+ANTHROPIC_API_KEY = "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"
 PUBLIC_CHANNEL = "@AlphaDXBcrypto"
 VIP_CHANNEL = "@AlphaDXBcryptoPRO"
 
