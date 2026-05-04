@@ -9,6 +9,7 @@ from datetime import datetime
 from io import BytesIO
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+print(f"TOKEN CHECK: {TELEGRAM_TOKEN[:20]}")
 PUBLIC_CHANNEL = "@AlphaDXBcrypto"
 VIP_CHANNEL = "@AlphaDXBcryptoPRO"
 
