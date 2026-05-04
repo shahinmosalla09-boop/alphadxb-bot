@@ -192,7 +192,7 @@ Keep it professional, clear and suitable for crypto traders."""
         print(f"✅ AI Analysis done")
         return analysis
     except Exception as e:
-        print(f"❌ AI error: {e}")
+        print(f"❌ AI error: {e} | Response: {response.text[:200] if 'response' in locals() else 'no response'}")
         return None
 
 def price_arrow(change):
