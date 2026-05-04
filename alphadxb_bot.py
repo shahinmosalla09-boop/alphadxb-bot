@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 from io import BytesIO
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_TOKEN = "8774593158:AAEtqggo7ReinWqO9rkUw6v74jA9HCEJcA4"
 print(f"TOKEN CHECK: {TELEGRAM_TOKEN[:20]}")
 PUBLIC_CHANNEL = "@AlphaDXBcrypto"
 VIP_CHANNEL = "@AlphaDXBcryptoPRO"
