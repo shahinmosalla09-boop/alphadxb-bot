@@ -2,6 +2,7 @@ import requests
 import schedule
 import time
 import os
+import threading
 import base64
 import matplotlib
 matplotlib.use('Agg')
@@ -10,18 +11,22 @@ from datetime import datetime
 from io import BytesIO
 
 TELEGRAM_TOKEN = "8774593158:AAEtqggo7ReinWqO9rkUw6v74jA9HCEJcA4"
-ANTHROPIC_API_KEY = "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"
+ADMIN_BOT_TOKEN = os.environ.get("ADMIN_BOT_TOKEN", "")
+ADMIN_CHAT_ID = 1671480768
 PUBLIC_CHANNEL = "@AlphaDXBcrypto"
 VIP_CHANNEL = "@AlphaDXBcryptoPRO"
 
-def send_message(channel, text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+# ============================================
+# ارسال پیام
+# ============================================
+def send_message(token, channel, text):
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": channel, "text": text, "parse_mode": "HTML"}
     try:
         r = requests.post(url, json=payload, timeout=10)
         print(f"✅ Message: {r.status_code}")
     except Exception as e:
-        print(f"❌ Message error: {e}")
+        print(f"❌ Error: {e}")
 
 def send_photo(channel, photo_bytes, caption=""):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
@@ -32,11 +37,14 @@ def send_photo(channel, photo_bytes, caption=""):
             timeout=60)
         print(f"✅ Photo: {r.status_code}")
         if r.status_code != 200:
-            send_message(channel, caption)
+            send_message(TELEGRAM_TOKEN, channel, caption)
     except Exception as e:
         print(f"❌ Photo error: {e}")
-        send_message(channel, caption)
+        send_message(TELEGRAM_TOKEN, channel, caption)
 
+# ============================================
+# گرفتن قیمت‌ها
+# ============================================
 def get_prices():
     try:
         symbols = {"BTC": "XXBTZUSD", "ETH": "XETHZUSD", "SOL": "SOLUSD", "BNB": "BNBUSD"}
@@ -47,8 +55,7 @@ def get_prices():
             if not data.get("error"):
                 result = data["result"]
                 key = list(result.keys())[0]
-                price = float(result[key]["c"][0])
-                prices[coin] = price
+                prices[coin] = float(result[key]["c"][0])
         return prices if len(prices) >= 3 else None
     except Exception as e:
         print(f"❌ Price error: {e}")
@@ -69,9 +76,8 @@ def get_ohlc():
         if not data.get("error"):
             result = data["result"]
             key = [k for k in result.keys() if k != "last"][0]
-            candles = result[key]
             ohlc = []
-            for c in candles[-60:]:
+            for c in result[key][-60:]:
                 ohlc.append({
                     "time": datetime.fromtimestamp(c[0]),
                     "open": float(c[1]),
@@ -148,62 +154,17 @@ def create_chart(ohlc, supports, resistances):
     plt.close()
     return buf.read()
 
-def get_ai_analysis(chart_bytes, price, supports, resistances, fg_value, fg_label):
-    try:
-        chart_b64 = base64.standard_b64encode(chart_bytes).decode("utf-8")
-        prompt = f"""You are a professional crypto analyst. Analyze this BTC/USDT 4H chart and write a short market update for a Telegram channel.
-
-Current data:
-- BTC Price: ${price:,.0f}
-- Support levels: {', '.join([f'${s:,.0f}' for s in supports])}
-- Resistance levels: {', '.join([f'${r:,.0f}' for r in resistances])}
-- Market Sentiment: {fg_label} ({fg_value})
-
-Write a concise analysis in English (max 150 words) including:
-1. Current market bias (bullish/bearish/neutral)
-2. Key levels to watch
-3. Two scenarios (bull and bear case)
-4. One actionable insight
-
-Keep it professional, clear and suitable for crypto traders."""
-
-        response = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
-            },
-            json={
-                "model": "claude-opus-4-6",
-                "max_tokens": 300,
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": chart_b64}},
-                        {"type": "text", "text": prompt}
-                    ]
-                }]
-            },
-            timeout=30
-        )
-        data = response.json()
-        analysis = data["content"][0]["text"]
-        print(f"✅ AI Analysis done")
-        return analysis
-    except Exception as e:
-        print(f"❌ AI error: {e} | Response: {response.text[:200] if 'response' in locals() else 'no response'}")
-        return None
-
 def price_arrow(change):
     return f"📈 +{change:.2f}%" if change >= 0 else f"📉 {change:.2f}%"
 
+# ============================================
+# پست صبحگاهی
+# ============================================
 def morning_update():
     print(f"\n[{datetime.now().strftime('%H:%M')}] Morning update...")
     prices = get_prices()
     fg_val, fg_label = get_fear_greed()
     if not prices:
-        print("Could not get prices")
         return
     date_str = datetime.now().strftime("%b %d, %Y")
     btc = prices.get("BTC", 0)
@@ -214,14 +175,15 @@ def morning_update():
     if ohlc:
         supports, resistances = find_levels(ohlc)
         chart = create_chart(ohlc, supports, resistances)
-        analysis = get_ai_analysis(chart, btc, supports, resistances, fg_val, fg_label)
-        if not analysis:
-            if fg_val < 30:
-                analysis = f"Market in Extreme Fear. Watch support at ${supports[0]:,.0f}. Potential bounce setup."
-            elif fg_val > 70:
-                analysis = f"Market Greedy. Resistance at ${resistances[0]:,.0f}. Watch for pullback to ${supports[0]:,.0f}."
-            else:
-                analysis = f"Neutral market. Break above ${resistances[0]:,.0f} = bullish. Break below ${supports[0]:,.0f} = bearish."
+        if fg_val < 30:
+            bias = "Extreme Fear - possible bounce"
+            scenario = f"If holds above ${supports[0]:,.0f} -> target ${resistances[0]:,.0f}\nIf breaks ${supports[0]:,.0f} -> next ${supports[1] if len(supports)>1 else supports[0]*0.97:,.0f}"
+        elif fg_val > 70:
+            bias = "Greed - watch for pullback"
+            scenario = f"If breaks ${resistances[0]:,.0f} -> strong move up\nIf rejects -> pullback to ${supports[0]:,.0f}"
+        else:
+            bias = "Neutral - wait for breakout"
+            scenario = f"Break above ${resistances[0]:,.0f} -> Bullish\nBreak below ${supports[0]:,.0f} -> Bearish"
         caption = f"""GM! AlphaDXB Morning Update
 {date_str}
 
@@ -233,7 +195,12 @@ SOL: ${sol:,.2f}
 Sentiment: {fg_label.upper()} ({fg_val})
 
 BTC 4H Analysis:
-{analysis}
+Resistance: ${resistances[0]:,.0f}
+Support: ${supports[0]:,.0f}
+Bias: {bias}
+
+Scenarios:
+{scenario}
 
 Full signals -> {VIP_CHANNEL}
 #crypto #bitcoin #dubai #AlphaDXB"""
@@ -251,7 +218,7 @@ Sentiment: {fg_label.upper()} ({fg_val})
 
 Full signals -> {VIP_CHANNEL}
 #crypto #bitcoin #dubai #AlphaDXB"""
-        send_message(PUBLIC_CHANNEL, msg)
+        send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, msg)
 
 def evening_update():
     print(f"\n[{datetime.now().strftime('%H:%M')}] Evening update...")
@@ -276,13 +243,101 @@ Sentiment: {fg_label.upper()} ({fg_val})
 
 Tomorrow's signals -> {VIP_CHANNEL}
 #crypto #bitcoin #dubai #AlphaDXB"""
-    send_message(PUBLIC_CHANNEL, msg)
+    send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, msg)
 
+# ============================================
+# Admin Bot
+# ============================================
+def format_analysis(text):
+    lines = [l.strip() for l in text.strip().split('\n') if l.strip()]
+    coins = [l for l in lines if l.startswith('#')]
+    analysis = [l for l in lines if not l.startswith('#')]
+    coin_str = ' '.join(coins) if coins else '#crypto'
+    analysis_str = '\n'.join(analysis)
+    return f"""📊 <b>AlphaDXB Market Analysis</b>
+
+{analysis_str}
+
+🇦🇪 AlphaDXB | Dubai Crypto Signals
+{coin_str} #dubai #AlphaDXB"""
+
+def process_update(update):
+    msg = update.get("message", {})
+    chat_id = msg.get("chat", {}).get("id")
+    if chat_id != ADMIN_CHAT_ID:
+        return
+    text = msg.get("text", "")
+    caption = msg.get("caption", "")
+    photo = msg.get("photo")
+    file_id = photo[-1]["file_id"] if photo else None
+
+    target = PUBLIC_CHANNEL
+    content = caption if photo else text
+    if content.startswith("/vip"):
+        target = VIP_CHANNEL
+        content = content.replace("/vip", "").strip()
+
+    if not content or content.startswith("/start"):
+        send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, "✅ Admin Bot ready!\n\nSend text or photo+caption to post to PUBLIC channel.\nAdd /vip at start to post to VIP channel.")
+        return
+
+    formatted = format_analysis(content)
+
+    if file_id:
+        # ارسال عکس با caption
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+        try:
+            # دانلود عکس
+            file_url = f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}/getFile?file_id={file_id}"
+            r = requests.get(file_url, timeout=10)
+            file_path = r.json()["result"]["file_path"]
+            photo_r = requests.get(f"https://api.telegram.org/file/bot{ADMIN_BOT_TOKEN}/{file_path}", timeout=30)
+            photo_bytes = photo_r.content
+            r2 = requests.post(url,
+                files={"photo": ("image.jpg", BytesIO(photo_bytes), "image/jpeg")},
+                data={"chat_id": target, "caption": formatted, "parse_mode": "HTML"},
+                timeout=60)
+            print(f"✅ Admin photo sent: {r2.status_code}")
+            send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"✅ Posted to {target}!")
+        except Exception as e:
+            print(f"❌ Admin photo error: {e}")
+            send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"❌ Error: {e}")
+    else:
+        send_message(TELEGRAM_TOKEN, target, formatted)
+        send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"✅ Posted to {target}!")
+
+def run_admin_bot():
+    print("Admin Bot Starting...")
+    offset = 0
+    while True:
+        try:
+            url = f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}/getUpdates"
+            r = requests.get(url, params={"offset": offset, "timeout": 30}, timeout=35)
+            updates = r.json().get("result", [])
+            for update in updates:
+                process_update(update)
+                offset = update["update_id"] + 1
+        except Exception as e:
+            print(f"❌ Admin error: {e}")
+            time.sleep(5)
+
+# ============================================
+# اجرا
+# ============================================
 if __name__ == "__main__":
     print("AlphaDXB Bot Starting...")
+    
+    # Admin bot رو توی thread جدا اجرا کن
+    admin_thread = threading.Thread(target=run_admin_bot, daemon=True)
+    admin_thread.start()
+    
+    # پست اول
     morning_update()
+    
+    # Schedule
     schedule.every().day.at("04:00").do(morning_update)
     schedule.every().day.at("16:00").do(evening_update)
+    
     print("Bot is running!")
     while True:
         schedule.run_pending()
