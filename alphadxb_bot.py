@@ -266,9 +266,12 @@ def process_update(update):
     chat_id = msg.get("chat", {}).get("id")
     if chat_id != ADMIN_CHAT_ID:
         return
+
     text = msg.get("text", "")
     caption = msg.get("caption", "")
     photo = msg.get("photo")
+    forward_from_chat = update.get("message", {}).get("forward_from_chat")
+    forward_message_id = update.get("message", {}).get("forward_from_message_id")
     file_id = photo[-1]["file_id"] if photo else None
 
     target = PUBLIC_CHANNEL
@@ -277,17 +280,18 @@ def process_update(update):
         target = VIP_CHANNEL
         content = content.replace("/vip", "").strip()
 
-    if not content or content.startswith("/start"):
-        send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, "✅ Admin Bot ready!\n\nSend text or photo+caption to post to PUBLIC channel.\nAdd /vip at start to post to VIP channel.")
+    if not content and not photo:
         return
 
-    formatted = format_analysis(content)
+    if content.startswith("/start"):
+        send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, "✅ Admin Bot ready!\n\nSend or forward any post with photo+caption.\nAdd /vip at start for VIP channel.")
+        return
+
+    formatted = format_analysis(content) if content else ""
 
     if file_id:
-        # ارسال عکس با caption
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
         try:
-            # دانلود عکس
             file_url = f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}/getFile?file_id={file_id}"
             r = requests.get(file_url, timeout=10)
             file_path = r.json()["result"]["file_path"]
@@ -302,24 +306,23 @@ def process_update(update):
         except Exception as e:
             print(f"❌ Admin photo error: {e}")
             send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"❌ Error: {e}")
-    else:
+    elif text:
         send_message(TELEGRAM_TOKEN, target, formatted)
         send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"✅ Posted to {target}!")
-
-def run_admin_bot():
-    print("Admin Bot Starting...")
-    offset = 0
-    while True:
+    elif forward_from_chat and forward_message_id:
+        # forward از کانال دیگه
         try:
-            url = f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}/getUpdates"
-            r = requests.get(url, params={"offset": offset, "timeout": 30}, timeout=35)
-            updates = r.json().get("result", [])
-            for update in updates:
-                process_update(update)
-                offset = update["update_id"] + 1
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/copyMessage"
+            r = requests.post(url, json={
+                "chat_id": target,
+                "from_chat_id": forward_from_chat["id"],
+                "message_id": forward_message_id
+            }, timeout=10)
+            print(f"✅ Forwarded: {r.status_code}")
+            send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"✅ Posted to {target}!")
         except Exception as e:
-            print(f"❌ Admin error: {e}")
-            time.sleep(5)
+            print(f"❌ Forward error: {e}")
+            send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"❌ Error: {e}")
 
 # ============================================
 # اجرا
