@@ -10,7 +10,7 @@ from datetime import datetime
 from io import BytesIO
 
 TELEGRAM_TOKEN = "8774593158:AAEtqggo7ReinWqO9rkUw6v74jA9HCEJcA4"
-ADMIN_BOT_TOKEN = os.environ.get("8794125412:AAEBmeiX4k-HuwTmhXW1LhZhOXm_BAnl1V8", "")
+ADMIN_BOT_TOKEN = "8794125412:AAEBmeiX4k-HuwTmhXW1LhZhOXm_BAnl1V8"
 ADMIN_CHAT_ID = 1671480768
 PUBLIC_CHANNEL = "@AlphaDXBcrypto"
 VIP_CHANNEL = "@AlphaDXBcryptoPRO"
