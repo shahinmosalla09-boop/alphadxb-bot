@@ -3,7 +3,6 @@ import schedule
 import time
 import os
 import threading
-import base64
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -16,9 +15,6 @@ ADMIN_CHAT_ID = 1671480768
 PUBLIC_CHANNEL = "@AlphaDXBcrypto"
 VIP_CHANNEL = "@AlphaDXBcryptoPRO"
 
-# ============================================
-# ارسال پیام
-# ============================================
 def send_message(token, channel, text):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": channel, "text": text, "parse_mode": "HTML"}
@@ -42,9 +38,6 @@ def send_photo(channel, photo_bytes, caption=""):
         print(f"❌ Photo error: {e}")
         send_message(TELEGRAM_TOKEN, channel, caption)
 
-# ============================================
-# گرفتن قیمت‌ها
-# ============================================
 def get_prices():
     try:
         symbols = {"BTC": "XXBTZUSD", "ETH": "XETHZUSD", "SOL": "SOLUSD", "BNB": "BNBUSD"}
@@ -154,12 +147,6 @@ def create_chart(ohlc, supports, resistances):
     plt.close()
     return buf.read()
 
-def price_arrow(change):
-    return f"📈 +{change:.2f}%" if change >= 0 else f"📉 {change:.2f}%"
-
-# ============================================
-# پست صبحگاهی
-# ============================================
 def morning_update():
     print(f"\n[{datetime.now().strftime('%H:%M')}] Morning update...")
     prices = get_prices()
@@ -245,9 +232,6 @@ Tomorrow's signals -> {VIP_CHANNEL}
 #crypto #bitcoin #dubai #AlphaDXB"""
     send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, msg)
 
-# ============================================
-# Admin Bot
-# ============================================
 def format_analysis(text):
     lines = [l.strip() for l in text.strip().split('\n') if l.strip()]
     coins = [l for l in lines if l.startswith('#')]
@@ -270,8 +254,8 @@ def process_update(update):
     text = msg.get("text", "")
     caption = msg.get("caption", "")
     photo = msg.get("photo")
-    forward_from_chat = update.get("message", {}).get("forward_from_chat")
-    forward_message_id = update.get("message", {}).get("forward_from_message_id")
+    forward_from_chat = msg.get("forward_from_chat")
+    forward_message_id = msg.get("forward_from_message_id")
     file_id = photo[-1]["file_id"] if photo else None
 
     target = PUBLIC_CHANNEL
@@ -280,23 +264,19 @@ def process_update(update):
         target = VIP_CHANNEL
         content = content.replace("/vip", "").strip()
 
-    if not content and not photo:
-        return
-
     if content.startswith("/start"):
-        send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, "✅ Admin Bot ready!\n\nSend or forward any post with photo+caption.\nAdd /vip at start for VIP channel.")
+        send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, "✅ Admin Bot ready!\n\nSend or forward any post.\nAdd /vip at start for VIP channel.")
         return
-
-    formatted = format_analysis(content) if content else ""
 
     if file_id:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
         try:
             file_url = f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}/getFile?file_id={file_id}"
             r = requests.get(file_url, timeout=10)
             file_path = r.json()["result"]["file_path"]
             photo_r = requests.get(f"https://api.telegram.org/file/bot{ADMIN_BOT_TOKEN}/{file_path}", timeout=30)
             photo_bytes = photo_r.content
+            formatted = format_analysis(content) if content else "📊 AlphaDXB Market Analysis\n\n🇦🇪 AlphaDXB | Dubai Crypto Signals\n#crypto #dubai #AlphaDXB"
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
             r2 = requests.post(url,
                 files={"photo": ("image.jpg", BytesIO(photo_bytes), "image/jpeg")},
                 data={"chat_id": target, "caption": formatted, "parse_mode": "HTML"},
@@ -306,11 +286,7 @@ def process_update(update):
         except Exception as e:
             print(f"❌ Admin photo error: {e}")
             send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"❌ Error: {e}")
-    elif text:
-        send_message(TELEGRAM_TOKEN, target, formatted)
-        send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"✅ Posted to {target}!")
     elif forward_from_chat and forward_message_id:
-        # forward از کانال دیگه
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/copyMessage"
             r = requests.post(url, json={
@@ -323,24 +299,33 @@ def process_update(update):
         except Exception as e:
             print(f"❌ Forward error: {e}")
             send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"❌ Error: {e}")
+    elif text and not text.startswith("/"):
+        formatted = format_analysis(text)
+        send_message(TELEGRAM_TOKEN, target, formatted)
+        send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"✅ Posted to {target}!")
 
-# ============================================
-# اجرا
-# ============================================
+def run_admin_bot():
+    print("Admin Bot Starting...")
+    offset = 0
+    while True:
+        try:
+            url = f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}/getUpdates"
+            r = requests.get(url, params={"offset": offset, "timeout": 30}, timeout=35)
+            updates = r.json().get("result", [])
+            for update in updates:
+                process_update(update)
+                offset = update["update_id"] + 1
+        except Exception as e:
+            print(f"❌ Admin error: {e}")
+            time.sleep(5)
+
 if __name__ == "__main__":
     print("AlphaDXB Bot Starting...")
-    
-    # Admin bot رو توی thread جدا اجرا کن
     admin_thread = threading.Thread(target=run_admin_bot, daemon=True)
     admin_thread.start()
-    
-    # پست اول
     morning_update()
-    
-    # Schedule
     schedule.every().day.at("04:00").do(morning_update)
     schedule.every().day.at("16:00").do(evening_update)
-    
     print("Bot is running!")
     while True:
         schedule.run_pending()
