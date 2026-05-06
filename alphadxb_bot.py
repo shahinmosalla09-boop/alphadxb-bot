@@ -19,6 +19,29 @@ except ImportError:
     pass
 
 
+# ---------- DEBUG: print which env vars Python can see ----------
+print("=" * 60)
+print("ENV VAR DEBUG START")
+print("=" * 60)
+expected = ["TELEGRAM_TOKEN", "ADMIN_BOT_TOKEN", "ADMIN_CHAT_ID", "PUBLIC_CHANNEL", "VIP_CHANNEL"]
+for name in expected:
+    raw = os.environ.get(name)
+    if raw is None:
+        print(f"  {name}: <NOT FOUND>")
+    elif raw == "":
+        print(f"  {name}: <EMPTY STRING>")
+    else:
+        print(f"  {name}: <SET, length={len(raw)}>")
+print("---")
+print("All env vars currently visible to Python (names only):")
+all_names = sorted(os.environ.keys())
+print("  " + ", ".join(all_names))
+print("=" * 60)
+print("ENV VAR DEBUG END")
+print("=" * 60)
+sys.stdout.flush()
+
+
 # ---------- Config (loaded from environment / .env file) ----------
 
 def _require_env(name: str) -> str:
