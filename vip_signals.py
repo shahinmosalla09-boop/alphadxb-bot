@@ -1,42 +1,57 @@
 """
-VIP swing-signal engine.
+VIP swing-signal engine — Smart Money / Order Block edition.
 
-Self-contained module: fetches OHLCV from Binance, computes indicators,
-detects swing-trade setups, and posts signals to the VIP channel.
+Methodology (in priority order):
+  1. Higher-timeframe bias (1D structure)         → only trade with the bias
+  2. Active Order Block (OB) on 4H                → unmitigated demand/supply
+  3. Price testing the OB zone right now          → mitigation entry
+  4. Bullish/bearish reaction inside the zone     → candlestick confirmation
+  5. Fair Value Gap (FVG) in trade direction      → imbalance confluence
+  6. Tight stop just beyond OB extremes           → low-error entry
+  7. Take-profit at opposing liquidity (swing)    → realistic target
+
+Signals only fire when 4 of these 5 confluences are true (HTF, OB,
+mitigation+pattern, FVG, R:R ≥ 1:2). Result: fewer signals, far higher quality.
 
 Public API:
     scan_and_post(telegram_token: str, vip_channel: str) -> None
-        Scan all watched coins once and post any qualifying signals.
-
-Edit this file when you want to change:
-    - Which coins are watched (COINS list below)
-    - Indicator thresholds (RSI ranges, ATR multiplier, EMA periods)
-    - Signal-message format (format_signal_message)
-    - Cooldown between signals (COOLDOWN_HOURS)
 """
 
 import json
 from datetime import datetime
-from io import BytesIO
 
 import requests
 
 
 # ---------- Tweakable settings ----------
 
-COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
-COOLDOWN_HOURS = 12          # don't repeat a signal for the same coin within X hours
+COINS            = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+COOLDOWN_HOURS   = 12
 SIGNAL_STATE_FILE = "signal_state.json"
-ATR_STOP_MULT = 1.5          # SL distance = ATR * this
-TP1_RR = 2                   # TP1 = entry +/- (risk * 2)
-TP2_RR = 3                   # TP2 = entry +/- (risk * 3)
-NEAR_LEVEL_PCT = 0.04        # "near" support/resistance = within 4%
-RSI_LONG_MIN, RSI_LONG_MAX = 30, 55
-RSI_SHORT_MIN, RSI_SHORT_MAX = 45, 70
-MIN_CONDITIONS = 4           # out of 5 to trigger a signal
+
+HTF_INTERVAL     = "1d"
+LTF_INTERVAL     = "4h"
+HTF_LIMIT        = 100
+LTF_LIMIT        = 250
+
+SWING_LEFT       = 3
+SWING_RIGHT      = 3
+
+IMPULSE_LOOKAHEAD = 5     # candles after a candidate OB to confirm an impulse
+IMPULSE_ATR_MULT  = 2.0   # impulse high-low / ATR threshold
+OB_MAX_AGE_BARS   = 80    # ignore OBs older than this
+OB_MAX_TOUCHES    = 2     # an OB tested ≥ this many times is exhausted
+
+SL_BUFFER_ATR    = 0.5    # SL distance beyond OB extreme = this * ATR
+MIN_RR_TP1       = 2.0    # require TP1 ≥ 1:2 R:R, else reject the setup
+TP1_RR           = 2
+TP2_RR           = 3
+MAX_SL_PCT       = 0.05   # never accept a setup whose SL is > 5% from entry
+
+REQUIRED_CONFLUENCES = 4  # of 5 (HTF, OB, mitigation+pattern, FVG, R:R)
 
 
-# ---------- Telegram send ----------
+# ---------- Telegram ----------
 
 def _send(token: str, channel: str, text: str) -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -47,11 +62,13 @@ def _send(token: str, channel: str, text: str) -> None:
             timeout=10,
         )
         print(f"[VIP] Send: {r.status_code}")
+        if r.status_code != 200:
+            print(f"[VIP]   Body: {r.text[:200]}")
     except Exception as e:
         print(f"[VIP] ❌ Send error: {e}")
 
 
-# ---------- Market data (KuCoin, no US geo block) ----------
+# ---------- Market data (KuCoin, no US block) ----------
 
 _KUCOIN_INTERVAL = {
     "1m":  "1min",  "3m":  "3min",  "5m":  "5min",  "15m": "15min", "30m": "30min",
@@ -61,13 +78,8 @@ _KUCOIN_INTERVAL = {
 
 
 def get_klines(symbol: str, interval: str, limit: int = 100):
-    """Fetch OHLCV candles from KuCoin public API.
-
-    KuCoin works from US-based hosts (unlike Binance/Bybit/OKX, which return 403/451).
-    KuCoin returns newest-first; rows are [time(s), open, close, high, low, volume, turnover].
-    """
+    """KuCoin format per row: [time(s), open, close, high, low, volume, turnover]."""
     kucoin_interval = _KUCOIN_INTERVAL.get(interval, interval)
-    # Symbol format: BTCUSDT → BTC-USDT
     if symbol.endswith("USDT"):
         kucoin_symbol = f"{symbol[:-4]}-USDT"
     else:
@@ -85,13 +97,9 @@ def get_klines(symbol: str, interval: str, limit: int = 100):
         if data.get("code") != "200000":
             print(f"[VIP] ❌ KuCoin {symbol} {interval}: {data.get('msg')}")
             return None
-        rows = data.get("data", []) or []
-        # Newest first → reverse so the list ends with the most recent candle.
-        rows = list(reversed(rows))
-        # Keep only the last `limit` candles for downstream calculations.
+        rows = list(reversed(data.get("data", []) or []))
         if len(rows) > limit:
             rows = rows[-limit:]
-        # KuCoin order: [time(s), open, close, high, low, volume, turnover]
         return [
             {
                 "time":   datetime.fromtimestamp(int(k[0])),
@@ -108,70 +116,210 @@ def get_klines(symbol: str, interval: str, limit: int = 100):
         return None
 
 
-# ---------- Indicators ----------
+# ---------- ATR ----------
 
-def calc_ema(values, period):
-    if len(values) < period:
-        return [None] * len(values)
-    multiplier = 2 / (period + 1)
-    ema = [None] * (period - 1)
-    ema.append(sum(values[:period]) / period)
-    for i in range(period, len(values)):
-        ema.append((values[i] - ema[-1]) * multiplier + ema[-1])
-    return ema
-
-
-def calc_rsi(values, period=14):
-    if len(values) < period + 1:
-        return [None] * len(values)
-    gains, losses = [], []
-    for i in range(1, len(values)):
-        d = values[i] - values[i - 1]
-        gains.append(max(d, 0))
-        losses.append(abs(min(d, 0)))
-    rsi = [None] * period
-    avg_g = sum(gains[:period]) / period
-    avg_l = sum(losses[:period]) / period
-    rsi.append(100 if avg_l == 0 else 100 - 100 / (1 + avg_g / avg_l))
-    for i in range(period, len(gains)):
-        avg_g = (avg_g * (period - 1) + gains[i]) / period
-        avg_l = (avg_l * (period - 1) + losses[i]) / period
-        rsi.append(100 if avg_l == 0 else 100 - 100 / (1 + avg_g / avg_l))
-    return rsi
-
-
-def calc_macd(values, fast=12, slow=26, signal=9):
-    ema_fast = calc_ema(values, fast)
-    ema_slow = calc_ema(values, slow)
-    macd_line = [None if (f is None or s is None) else f - s for f, s in zip(ema_fast, ema_slow)]
-    valid = [x for x in macd_line if x is not None]
-    if len(valid) < signal:
-        return macd_line, [None] * len(macd_line), [None] * len(macd_line)
-    leading = len(macd_line) - len(valid)
-    sig_ema = calc_ema(valid, signal)
-    signal_line = [None] * leading + sig_ema
-    histogram = [None if (m is None or s is None) else m - s for m, s in zip(macd_line, signal_line)]
-    return macd_line, signal_line, histogram
-
-
-def calc_atr(highs, lows, closes, period=14):
-    if len(highs) < period + 1:
-        return [None] * len(highs)
-    trs = [None]
-    for i in range(1, len(highs)):
-        trs.append(max(
-            highs[i] - lows[i],
-            abs(highs[i] - closes[i - 1]),
-            abs(lows[i] - closes[i - 1]),
-        ))
-    atr = [None] * period
-    atr.append(sum(trs[1:period + 1]) / period)
-    for i in range(period + 1, len(trs)):
-        atr.append((atr[-1] * (period - 1) + trs[i]) / period)
+def calc_atr(candles, period=14):
+    if len(candles) < period + 1:
+        return None
+    trs = []
+    for i in range(1, len(candles)):
+        h, l, prev_c = candles[i]["high"], candles[i]["low"], candles[i - 1]["close"]
+        trs.append(max(h - l, abs(h - prev_c), abs(l - prev_c)))
+    if len(trs) < period:
+        return None
+    atr = sum(trs[:period]) / period
+    for tr in trs[period:]:
+        atr = (atr * (period - 1) + tr) / period
     return atr
 
 
-# ---------- State (cooldown) ----------
+# ---------- Swing points ----------
+
+def find_swings(candles, left=SWING_LEFT, right=SWING_RIGHT):
+    highs, lows = [], []
+    n = len(candles)
+    for i in range(left, n - right):
+        h = candles[i]["high"]
+        l = candles[i]["low"]
+        if (all(candles[j]["high"] < h for j in range(i - left, i)) and
+            all(candles[j]["high"] < h for j in range(i + 1, i + right + 1))):
+            highs.append((i, h))
+        if (all(candles[j]["low"] > l for j in range(i - left, i)) and
+            all(candles[j]["low"] > l for j in range(i + 1, i + right + 1))):
+            lows.append((i, l))
+    return highs, lows
+
+
+# ---------- Higher-timeframe bias ----------
+
+def htf_bias(candles_htf):
+    """Return 'bullish' / 'bearish' / 'neutral' from the daily structure."""
+    highs, lows = find_swings(candles_htf, left=2, right=2)
+    if len(highs) < 2 or len(lows) < 2:
+        return "neutral"
+    h1, h2 = highs[-2][1], highs[-1][1]
+    l1, l2 = lows[-2][1],  lows[-1][1]
+    if h2 > h1 and l2 > l1:
+        return "bullish"
+    if h2 < h1 and l2 < l1:
+        return "bearish"
+    return "neutral"
+
+
+# ---------- Order Blocks ----------
+
+def find_order_blocks(candles, atr):
+    """Return all OBs detected in the candle series.
+
+    Definition we use:
+      Bullish OB = the last bearish candle before a strong bullish impulse
+                   that closes above the OB candle's high.
+      Bearish OB = the last bullish candle before a strong bearish impulse
+                   that closes below the OB candle's low.
+
+    We also drop OBs that are clearly "broken" (closed beyond their extreme
+    by a confirmed candle after formation).
+    """
+    obs = []
+    n = len(candles)
+    if atr is None:
+        return obs
+
+    for i in range(2, n - IMPULSE_LOOKAHEAD - 1):
+        c = candles[i]
+        body_dir = c["close"] - c["open"]
+
+        # ---- Bullish OB ----
+        if body_dir < 0:  # bearish candle
+            window = candles[i + 1: i + 1 + IMPULSE_LOOKAHEAD]
+            if not window:
+                continue
+            future_high = max(w["high"] for w in window)
+            impulse = future_high - c["low"]
+            move_close = window[-1]["close"]
+            if impulse >= atr * IMPULSE_ATR_MULT and move_close > c["high"]:
+                obs.append({
+                    "type":  "bullish",
+                    "index": i,
+                    "high":  c["high"],
+                    "low":   c["low"],
+                })
+
+        # ---- Bearish OB ----
+        elif body_dir > 0:  # bullish candle
+            window = candles[i + 1: i + 1 + IMPULSE_LOOKAHEAD]
+            if not window:
+                continue
+            future_low = min(w["low"] for w in window)
+            impulse = c["high"] - future_low
+            move_close = window[-1]["close"]
+            if impulse >= atr * IMPULSE_ATR_MULT and move_close < c["low"]:
+                obs.append({
+                    "type":  "bearish",
+                    "index": i,
+                    "high":  c["high"],
+                    "low":   c["low"],
+                })
+
+    # Drop broken / exhausted OBs
+    fresh = []
+    for ob in obs:
+        if ob["index"] < n - 1 - OB_MAX_AGE_BARS:
+            continue  # too old
+        # Count touches & detect break
+        touches, broken = 0, False
+        for j in range(ob["index"] + IMPULSE_LOOKAHEAD, n):
+            cj = candles[j]
+            if ob["type"] == "bullish":
+                # Touch = price entered the OB zone
+                if cj["low"] <= ob["high"]:
+                    touches += 1
+                # Broken = a candle closed below the OB low
+                if cj["close"] < ob["low"]:
+                    broken = True
+                    break
+            else:
+                if cj["high"] >= ob["low"]:
+                    touches += 1
+                if cj["close"] > ob["high"]:
+                    broken = True
+                    break
+        if not broken and touches < OB_MAX_TOUCHES:
+            ob["touches"] = touches
+            fresh.append(ob)
+    return fresh
+
+
+# ---------- Fair Value Gaps ----------
+
+def find_fvgs(candles):
+    """3-candle imbalance gaps. Returns list of dicts with type, low, high, index."""
+    fvgs = []
+    for i in range(1, len(candles) - 1):
+        c1 = candles[i - 1]
+        c3 = candles[i + 1]
+        if c3["low"] > c1["high"]:
+            fvgs.append({"type": "bullish", "index": i,
+                         "low": c1["high"], "high": c3["low"]})
+        elif c3["high"] < c1["low"]:
+            fvgs.append({"type": "bearish", "index": i,
+                         "low": c3["high"], "high": c1["low"]})
+    return fvgs
+
+
+def has_recent_fvg(candles, direction: str, lookback: int = 10) -> bool:
+    """True if a same-direction FVG formed in the last `lookback` candles."""
+    fvgs = find_fvgs(candles)
+    n = len(candles)
+    for fvg in fvgs[-15:]:
+        if fvg["type"] == direction and (n - 1 - fvg["index"]) <= lookback:
+            return True
+    return False
+
+
+# ---------- Candlestick patterns (entry confirmation) ----------
+
+def is_bullish_engulfing(p, c):
+    return (p["close"] < p["open"] and c["close"] > c["open"]
+            and c["close"] >= p["open"] and c["open"] <= p["close"])
+
+
+def is_bearish_engulfing(p, c):
+    return (p["close"] > p["open"] and c["close"] < c["open"]
+            and c["close"] <= p["open"] and c["open"] >= p["close"])
+
+
+def is_hammer(c):
+    body = abs(c["close"] - c["open"])
+    if body == 0:
+        return False
+    upper = c["high"] - max(c["open"], c["close"])
+    lower = min(c["open"], c["close"]) - c["low"]
+    return lower >= body * 2 and upper <= body
+
+
+def is_shooting_star(c):
+    body = abs(c["close"] - c["open"])
+    if body == 0:
+        return False
+    upper = c["high"] - max(c["open"], c["close"])
+    lower = min(c["open"], c["close"]) - c["low"]
+    return upper >= body * 2 and lower <= body
+
+
+def bullish_pattern(p, c):
+    if is_bullish_engulfing(p, c): return "Bullish Engulfing"
+    if is_hammer(c):              return "Hammer"
+    return None
+
+
+def bearish_pattern(p, c):
+    if is_bearish_engulfing(p, c): return "Bearish Engulfing"
+    if is_shooting_star(c):       return "Shooting Star"
+    return None
+
+
+# ---------- State ----------
 
 def _load_state():
     try:
@@ -189,129 +337,210 @@ def _save_state(state):
         print(f"[VIP] ❌ State save error: {e}")
 
 
+# ---------- Liquidity targets ----------
+
+def liquidity_targets(candles, direction: str):
+    """Return a list of price levels above (LONG) or below (SHORT) current price.
+
+    These are swing highs/lows — natural take-profit zones because liquidity
+    sits there.
+    """
+    highs, lows = find_swings(candles, left=2, right=2)
+    price = candles[-1]["close"]
+    if direction == "LONG":
+        return sorted({h for _, h in highs if h > price})
+    else:
+        return sorted({l for _, l in lows if l < price}, reverse=True)
+
+
 # ---------- Signal detection ----------
 
-def _swing_levels(candles, lookback=30):
-    recent = candles[-lookback:]
-    return min(c["low"] for c in recent), max(c["high"] for c in recent)
-
-
 def detect_signal(symbol: str):
-    """Return a signal dict or None."""
-    c4 = get_klines(symbol, "4h", 100)
-    cd = get_klines(symbol, "1d", 60)
-    if not c4 or len(c4) < 60 or not cd or len(cd) < 50:
+    candles_ltf = get_klines(symbol, LTF_INTERVAL, LTF_LIMIT)
+    candles_htf = get_klines(symbol, HTF_INTERVAL, HTF_LIMIT)
+    if not candles_ltf or len(candles_ltf) < 60:
+        return None
+    if not candles_htf or len(candles_htf) < 30:
         return None
 
-    closes_4h = [c["close"] for c in c4]
-    highs_4h  = [c["high"]  for c in c4]
-    lows_4h   = [c["low"]   for c in c4]
-    closes_1d = [c["close"] for c in cd]
+    bias = htf_bias(candles_htf)
+    if bias == "neutral":
+        return None  # no clear HTF direction → skip
 
-    e20 = calc_ema(closes_4h, 20)[-1]
-    e50 = calc_ema(closes_4h, 50)[-1]
-    rsi = calc_rsi(closes_4h, 14)[-1]
-    _, _, hist = calc_macd(closes_4h)
-    atr = calc_atr(highs_4h, lows_4h, closes_4h, 14)[-1]
-    daily_e50 = calc_ema(closes_1d, 50)[-1]
-    price = closes_4h[-1]
-    daily_close = closes_1d[-1]
-    hist_now = hist[-1]
-    hist_prev = hist[-2] if len(hist) >= 2 else None
-
-    if any(x is None for x in [e20, e50, rsi, hist_now, hist_prev, atr, daily_e50]):
+    atr = calc_atr(candles_ltf)
+    if atr is None or atr <= 0:
         return None
 
-    support, resistance = _swing_levels(c4, 30)
+    obs = find_order_blocks(candles_ltf, atr)
 
-    daily_up = daily_close > daily_e50
-    h4_up    = e20 > e50
-    rsi_rec  = RSI_LONG_MIN <= rsi <= RSI_LONG_MAX
-    macd_bull = hist_prev <= 0 and hist_now > 0
-    near_sup = (price - support) / price < NEAR_LEVEL_PCT
-    long_score = sum([daily_up, h4_up, rsi_rec, macd_bull, near_sup])
+    last  = candles_ltf[-1]
+    prev  = candles_ltf[-2]
+    price = last["close"]
 
-    daily_dn = daily_close < daily_e50
-    h4_dn    = e20 < e50
-    rsi_dec  = RSI_SHORT_MIN <= rsi <= RSI_SHORT_MAX
-    macd_bear = hist_prev >= 0 and hist_now < 0
-    near_res = (resistance - price) / price < NEAR_LEVEL_PCT
-    short_score = sum([daily_dn, h4_dn, rsi_dec, macd_bear, near_res])
+    # ---- LONG side ----
+    if bias == "bullish":
+        # 1) Find a fresh bullish OB whose zone the current price is inside
+        bull_obs = [ob for ob in obs if ob["type"] == "bullish"]
+        active_ob = None
+        for ob in sorted(bull_obs, key=lambda x: x["index"], reverse=True):
+            if ob["low"] <= price <= ob["high"] * 1.005:
+                active_ob = ob
+                break
+        if not active_ob:
+            return None
 
-    if long_score >= MIN_CONDITIONS:
-        risk = atr * ATR_STOP_MULT
+        # 2) Candle reaction inside / off the zone
+        pat = bullish_pattern(prev, last)
+        green_close = last["close"] > last["open"] and last["close"] > prev["close"]
+        reaction = pat is not None or green_close
+
+        # 3) Recent bullish FVG above the OB (confluence)
+        fvg = has_recent_fvg(candles_ltf, "bullish", lookback=10)
+
+        # 4) Compute SL / TPs
+        sl   = active_ob["low"] - atr * SL_BUFFER_ATR
+        risk = price - sl
+        if risk <= 0:
+            return None
+        if risk / price > MAX_SL_PCT:
+            return None
+
+        targets = liquidity_targets(candles_ltf, "LONG")
+        tp1_natural = targets[0] if targets else price + risk * TP1_RR
+        tp1 = max(tp1_natural, price + risk * TP1_RR)  # at minimum 1:2
+        tp2 = price + risk * TP2_RR
+
+        # 5) Confluence count
+        confluences = {
+            "HTF bias bullish": True,
+            "Active bullish OB": True,
+            "Reaction inside zone": reaction,
+            "Bullish FVG nearby": fvg,
+            "R:R ≥ 1:2": tp1 / price >= 1 + (MIN_RR_TP1 * risk / price) - 1e-9,
+        }
+        score = sum(1 for v in confluences.values() if v)
+        if score < REQUIRED_CONFLUENCES:
+            return None
+
         return {
-            "direction": "LONG", "symbol": symbol, "price": price, "entry": price,
-            "sl": price - risk, "tp1": price + risk * TP1_RR, "tp2": price + risk * TP2_RR,
-            "rsi": rsi, "support": support, "resistance": resistance,
-            "reasons": {
-                "Daily trend": "bullish" if daily_up else "neutral",
-                "4H trend":    "bullish (EMA20 > EMA50)" if h4_up else "neutral",
-                "RSI":         f"recovering ({rsi:.1f})" if rsi_rec else f"{rsi:.1f}",
-                "MACD":        "bullish crossover" if macd_bull else "still negative",
-                "Support":     f"near ${support:,.2f}" if near_sup else f"above ${support:,.2f}",
-            },
+            "direction": "LONG",
+            "symbol": symbol,
+            "price": price,
+            "entry": price,
+            "sl": sl,
+            "tp1": tp1,
+            "tp2": tp2,
+            "ob_zone": (active_ob["low"], active_ob["high"]),
+            "confluences": confluences,
+            "pattern": pat,
         }
 
-    if short_score >= MIN_CONDITIONS:
-        risk = atr * ATR_STOP_MULT
-        return {
-            "direction": "SHORT", "symbol": symbol, "price": price, "entry": price,
-            "sl": price + risk, "tp1": price - risk * TP1_RR, "tp2": price - risk * TP2_RR,
-            "rsi": rsi, "support": support, "resistance": resistance,
-            "reasons": {
-                "Daily trend": "bearish" if daily_dn else "neutral",
-                "4H trend":    "bearish (EMA20 < EMA50)" if h4_dn else "neutral",
-                "RSI":         f"declining ({rsi:.1f})" if rsi_dec else f"{rsi:.1f}",
-                "MACD":        "bearish crossover" if macd_bear else "still positive",
-                "Resistance":  f"near ${resistance:,.2f}" if near_res else f"below ${resistance:,.2f}",
-            },
+    # ---- SHORT side ----
+    if bias == "bearish":
+        bear_obs = [ob for ob in obs if ob["type"] == "bearish"]
+        active_ob = None
+        for ob in sorted(bear_obs, key=lambda x: x["index"], reverse=True):
+            if ob["low"] * 0.995 <= price <= ob["high"]:
+                active_ob = ob
+                break
+        if not active_ob:
+            return None
+
+        pat = bearish_pattern(prev, last)
+        red_close = last["close"] < last["open"] and last["close"] < prev["close"]
+        reaction = pat is not None or red_close
+
+        fvg = has_recent_fvg(candles_ltf, "bearish", lookback=10)
+
+        sl   = active_ob["high"] + atr * SL_BUFFER_ATR
+        risk = sl - price
+        if risk <= 0:
+            return None
+        if risk / price > MAX_SL_PCT:
+            return None
+
+        targets = liquidity_targets(candles_ltf, "SHORT")
+        tp1_natural = targets[0] if targets else price - risk * TP1_RR
+        tp1 = min(tp1_natural, price - risk * TP1_RR)
+        tp2 = price - risk * TP2_RR
+
+        confluences = {
+            "HTF bias bearish": True,
+            "Active bearish OB": True,
+            "Reaction inside zone": reaction,
+            "Bearish FVG nearby": fvg,
+            "R:R ≥ 1:2": (price - tp1) / price >= MIN_RR_TP1 * (risk / price) - 1e-9,
         }
+        score = sum(1 for v in confluences.values() if v)
+        if score < REQUIRED_CONFLUENCES:
+            return None
+
+        return {
+            "direction": "SHORT",
+            "symbol": symbol,
+            "price": price,
+            "entry": price,
+            "sl": sl,
+            "tp1": tp1,
+            "tp2": tp2,
+            "ob_zone": (active_ob["low"], active_ob["high"]),
+            "confluences": confluences,
+            "pattern": pat,
+        }
+
     return None
 
 
-# ---------- Signal formatting ----------
+# ---------- Format & post ----------
 
 def format_signal_message(sig):
     coin = sig["symbol"].replace("USDT", "")
     direction = sig["direction"]
     arrow = "🟢" if direction == "LONG" else "🔴"
     risk_pct = abs((sig["entry"] - sig["sl"]) / sig["entry"] * 100)
-    tp1_pct = abs((sig["tp1"] - sig["entry"]) / sig["entry"] * 100)
-    tp2_pct = abs((sig["tp2"] - sig["entry"]) / sig["entry"] * 100)
-    reasons = "\n".join(f"✓ {k}: {v}" for k, v in sig["reasons"].items())
+    tp1_pct  = abs((sig["tp1"] - sig["entry"]) / sig["entry"] * 100)
+    tp2_pct  = abs((sig["tp2"] - sig["entry"]) / sig["entry"] * 100)
+    rr1 = abs((sig["tp1"] - sig["entry"]) / (sig["entry"] - sig["sl"]))
+    rr2 = abs((sig["tp2"] - sig["entry"]) / (sig["entry"] - sig["sl"]))
 
-    return f"""{arrow} <b>NEW SWING SIGNAL — {coin}/USDT ({direction})</b>
+    confluences = "\n".join(
+        f"{'✅' if v else '◻️'} {k}" for k, v in sig["confluences"].items()
+    )
+
+    ob_lo, ob_hi = sig["ob_zone"]
+
+    return f"""{arrow} <b>SMC SWING SIGNAL — {coin}/USDT ({direction})</b>
 
 📍 Entry: ${sig['entry']:,.2f}
-🛑 Stop Loss: ${sig['sl']:,.2f} (-{risk_pct:.2f}%)
-🎯 TP1: ${sig['tp1']:,.2f} (+{tp1_pct:.2f}%)
-🎯 TP2: ${sig['tp2']:,.2f} (+{tp2_pct:.2f}%)
+🛑 Stop Loss: ${sig['sl']:,.2f} (−{risk_pct:.2f}%)
+🎯 TP1: ${sig['tp1']:,.2f} (+{tp1_pct:.2f}%) | R:R 1:{rr1:.2f}
+🎯 TP2: ${sig['tp2']:,.2f} (+{tp2_pct:.2f}%) | R:R 1:{rr2:.2f}
 
-📊 <b>R:R = 1:{TP1_RR} / 1:{TP2_RR}</b>
-⏱ Timeframe: 4H Swing
+📦 Order Block: ${ob_lo:,.2f} – ${ob_hi:,.2f}
+🕯 Candle pattern: {sig.get('pattern') or 'In-zone reaction'}
+⏱ Timeframe: {LTF_INTERVAL.upper()} (HTF bias: {HTF_INTERVAL.upper()})
+📐 Method: Smart Money Concepts (Order Block + FVG + Liquidity)
 
-<b>Setup confirmation:</b>
-{reasons}
+<b>Confluence checklist:</b>
+{confluences}
 
-⚠️ <b>Risk Management:</b>
-• Use only 1–2% of portfolio per trade
-• Always respect your Stop Loss
+⚠️ <b>Risk Management</b>
+• Use 1–2% of portfolio per trade
+• Always respect Stop Loss
 • This is not financial advice
 
 🇦🇪 AlphaDXB | Dubai Crypto Signals
-#{coin.lower()} #crypto #signals #AlphaDXB"""
+#{coin.lower()} #crypto #SMC #orderblock #signals #AlphaDXB"""
 
 
 # ---------- Public entry point ----------
 
 def scan_and_post(telegram_token: str, vip_channel: str) -> None:
-    """Scan all watched coins once. Post any signals to vip_channel."""
-    state = _load_state()
+    state  = _load_state()
     now_ts = datetime.now().timestamp()
     cooldown = COOLDOWN_HOURS * 3600
 
-    print(f"\n[VIP] [{datetime.now().strftime('%H:%M')}] Scanning {len(COINS)} coins...")
+    print(f"\n[VIP] [{datetime.now().strftime('%H:%M')}] SMC scan ({len(COINS)} coins)...")
     for coin in COINS:
         last = state.get(coin, {}).get("timestamp", 0)
         if now_ts - last < cooldown:
@@ -323,7 +552,8 @@ def scan_and_post(telegram_token: str, vip_channel: str) -> None:
             print(f"[VIP]   {coin}: detect error: {e}")
             continue
         if sig:
-            print(f"[VIP]   {coin}: {sig['direction']} @ ${sig['price']:,.2f}")
+            print(f"[VIP]   {coin}: {sig['direction']} @ ${sig['price']:,.2f} "
+                  f"(OB ${sig['ob_zone'][0]:,.2f}–${sig['ob_zone'][1]:,.2f})")
             _send(telegram_token, vip_channel, format_signal_message(sig))
             state[coin] = {
                 "timestamp": now_ts,
@@ -332,4 +562,4 @@ def scan_and_post(telegram_token: str, vip_channel: str) -> None:
             }
             _save_state(state)
         else:
-            print(f"[VIP]   {coin}: no signal")
+            print(f"[VIP]   {coin}: no setup")
