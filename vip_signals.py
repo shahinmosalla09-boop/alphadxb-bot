@@ -51,58 +51,60 @@ def _send(token: str, channel: str, text: str) -> None:
         print(f"[VIP] ❌ Send error: {e}")
 
 
-# ---------- Market data (Bybit, geo-friendly) ----------
+# ---------- Market data (KuCoin, no US geo block) ----------
 
-# Bybit interval mapping (minutes for intraday, "D" for daily, "W" for weekly)
-_BYBIT_INTERVAL = {
-    "1m":  "1",   "3m":  "3",   "5m":  "5",   "15m": "15", "30m": "30",
-    "1h":  "60",  "2h":  "120", "4h":  "240", "6h":  "360", "12h": "720",
-    "1d":  "D",   "1w":  "W",   "1M":  "M",
+_KUCOIN_INTERVAL = {
+    "1m":  "1min",  "3m":  "3min",  "5m":  "5min",  "15m": "15min", "30m": "30min",
+    "1h":  "1hour", "2h":  "2hour", "4h":  "4hour", "6h":  "6hour", "8h":  "8hour", "12h": "12hour",
+    "1d":  "1day",  "1w":  "1week",
 }
 
 
 def get_klines(symbol: str, interval: str, limit: int = 100):
-    """Fetch OHLCV candles from Bybit public API (no geo block on US Railway).
+    """Fetch OHLCV candles from KuCoin public API.
 
-    Bybit returns newest-first; we reverse so the list ends with the most
-    recent candle (same shape the rest of the code expects).
+    KuCoin works from US-based hosts (unlike Binance/Bybit/OKX, which return 403/451).
+    KuCoin returns newest-first; rows are [time(s), open, close, high, low, volume, turnover].
     """
-    bybit_interval = _BYBIT_INTERVAL.get(interval, interval)
+    kucoin_interval = _KUCOIN_INTERVAL.get(interval, interval)
+    # Symbol format: BTCUSDT → BTC-USDT
+    if symbol.endswith("USDT"):
+        kucoin_symbol = f"{symbol[:-4]}-USDT"
+    else:
+        kucoin_symbol = symbol
     try:
         r = requests.get(
-            "https://api.bybit.com/v5/market/kline",
-            params={
-                "category": "spot",
-                "symbol": symbol,
-                "interval": bybit_interval,
-                "limit": limit,
-            },
+            "https://api.kucoin.com/api/v1/market/candles",
+            params={"type": kucoin_interval, "symbol": kucoin_symbol},
             timeout=15,
         )
         if r.status_code != 200:
-            print(f"[VIP] ❌ Bybit {symbol} {interval}: HTTP {r.status_code}")
+            print(f"[VIP] ❌ KuCoin {symbol} {interval}: HTTP {r.status_code}")
             return None
         data = r.json()
-        if data.get("retCode") != 0:
-            print(f"[VIP] ❌ Bybit {symbol} {interval}: {data.get('retMsg')}")
+        if data.get("code") != "200000":
+            print(f"[VIP] ❌ KuCoin {symbol} {interval}: {data.get('msg')}")
             return None
-        rows = data.get("result", {}).get("list", [])
-        # Bybit format: [start_ms, open, high, low, close, volume, turnover]
-        # Newest first → reverse so newest is last (consistent with rest of code).
+        rows = data.get("data", []) or []
+        # Newest first → reverse so the list ends with the most recent candle.
         rows = list(reversed(rows))
+        # Keep only the last `limit` candles for downstream calculations.
+        if len(rows) > limit:
+            rows = rows[-limit:]
+        # KuCoin order: [time(s), open, close, high, low, volume, turnover]
         return [
             {
-                "time":   datetime.fromtimestamp(int(k[0]) / 1000),
+                "time":   datetime.fromtimestamp(int(k[0])),
                 "open":   float(k[1]),
-                "high":   float(k[2]),
-                "low":    float(k[3]),
-                "close":  float(k[4]),
+                "close":  float(k[2]),
+                "high":   float(k[3]),
+                "low":    float(k[4]),
                 "volume": float(k[5]),
             }
             for k in rows
         ]
     except Exception as e:
-        print(f"[VIP] ❌ Bybit error {symbol}: {e}")
+        print(f"[VIP] ❌ KuCoin error {symbol}: {e}")
         return None
 
 
