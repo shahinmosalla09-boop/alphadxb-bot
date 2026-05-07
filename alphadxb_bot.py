@@ -10,6 +10,7 @@ import schedule
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import vip_signals
 
 # Auto-load values from a ".env" file in the same folder, if it exists.
 try:
@@ -470,6 +471,11 @@ if __name__ == "__main__":
     morning_update()
     schedule.every().day.at("04:00").do(morning_update)
     schedule.every().day.at("16:00").do(evening_update)
+    # VIP swing-signal scanner — logic in vip_signals.py
+    def _vip_scan():
+        vip_signals.scan_and_post(TELEGRAM_TOKEN, VIP_CHANNEL)
+    schedule.every().hour.do(_vip_scan)
+    threading.Timer(60.0, _vip_scan).start()
     print("Bot is running!")
     while True:
         schedule.run_pending()
