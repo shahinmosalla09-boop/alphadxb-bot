@@ -316,8 +316,62 @@ Tomorrow's signals -> {VIP_CHANNEL}
 
 # ---------- Admin bot ----------
 
+def is_likely_english(text: str) -> bool:
+    """Return True if text has no Persian/Arabic characters."""
+    if not text:
+        return True
+    for ch in text:
+        code = ord(ch)
+        # Arabic block (covers Persian) + Arabic Presentation Forms
+        if (0x0600 <= code <= 0x06FF) or (0xFB50 <= code <= 0xFDFF) or (0xFE70 <= code <= 0xFEFF):
+            return False
+    return True
+
+
+def translate_to_english(text: str) -> str:
+    """Translate Persian/Arabic text to English using MyMemory free API."""
+    if not text or not text.strip():
+        return text
+    if is_likely_english(text):
+        return text  # already English, skip translation
+    try:
+        url = "https://api.mymemory.translated.net/get"
+        # MyMemory has a 500-char limit per request. For longer text, split by lines.
+        if len(text) <= 480:
+            params = {"q": text, "langpair": "fa|en"}
+            r = requests.get(url, params=params, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                translated = data.get("responseData", {}).get("translatedText", "").strip()
+                if translated and "MYMEMORY WARNING" not in translated.upper():
+                    return translated
+        else:
+            # Split by lines and translate piece by piece
+            lines = text.split("\n")
+            translated_lines = []
+            for line in lines:
+                if not line.strip() or is_likely_english(line):
+                    translated_lines.append(line)
+                    continue
+                params = {"q": line, "langpair": "fa|en"}
+                r = requests.get(url, params=params, timeout=15)
+                if r.status_code == 200:
+                    data = r.json()
+                    t = data.get("responseData", {}).get("translatedText", "").strip()
+                    translated_lines.append(t if t else line)
+                else:
+                    translated_lines.append(line)
+            return "\n".join(translated_lines)
+    except Exception as e:
+        print(f"❌ Translate error: {e}")
+    return text  # fallback: return original
+
+
 def format_analysis(text: str) -> str:
-    lines = [l.strip() for l in text.strip().split('\n') if l.strip()]
+    # First, translate Persian/Arabic content to English
+    translated = translate_to_english(text)
+
+    lines = [l.strip() for l in translated.strip().split('\n') if l.strip()]
     coins = [l for l in lines if l.startswith('#')]
     analysis = [l for l in lines if not l.startswith('#')]
     coin_str = ' '.join(coins) if coins else '#crypto'
