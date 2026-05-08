@@ -660,6 +660,123 @@ def build_signal_chart(sig) -> bytes:
     return buf.read()
 
 
+# ---------- Public-channel teaser ----------
+
+def build_teaser_chart(sig) -> bytes:
+    """Lighter chart for the public channel — shows only the OB and FVG zones,
+    NOT the exact Entry/SL/TP lines (those are VIP value)."""
+    candles = sig["candles"]
+    direction = sig["direction"]
+    coin = sig["symbol"].replace("USDT", "")
+    ob_low, ob_high = sig["ob_zone"]
+    ob_idx_global = sig["ob_index"]
+
+    show_n = 70
+    n = len(candles)
+    start = max(0, min(n - show_n, ob_idx_global - 10))
+    show = candles[start:n]
+    ob_idx = ob_idx_global - start
+
+    plt.style.use("dark_background")
+    fig, ax = plt.subplots(figsize=(13, 7.5))
+    fig.patch.set_facecolor("#0d1117")
+    ax.set_facecolor("#0d1117")
+
+    bull_clr, bear_clr = "#26a69a", "#ef5350"
+
+    for i, c in enumerate(show):
+        clr = bull_clr if c["close"] >= c["open"] else bear_clr
+        ax.plot([i, i], [c["low"], c["high"]], color=clr, linewidth=1.0)
+        body_h = abs(c["close"] - c["open"]) or (c["high"] - c["low"]) * 0.01
+        ax.bar(i, body_h, bottom=min(c["open"], c["close"]),
+               color=clr, width=0.7, alpha=0.95)
+
+    x_right = len(show) + 12
+    ax.set_xlim(-1, x_right)
+
+    # OB zone — clearly highlighted
+    ob_clr = bull_clr if direction == "LONG" else bear_clr
+    ax.axhspan(ob_low, ob_high, alpha=0.22, color=ob_clr, zorder=0)
+    if 0 <= ob_idx < len(show):
+        ax.scatter([ob_idx], [(ob_low + ob_high) / 2],
+                   marker="o", s=140, edgecolors=ob_clr,
+                   facecolors="none", linewidths=2.2, zorder=5)
+    ax.text(x_right - 1, (ob_low + ob_high) / 2, " Watch zone",
+            color=ob_clr, fontsize=11, fontweight="bold",
+            va="center", ha="right",
+            bbox=dict(boxstyle="round,pad=0.25", fc="#0d1117", ec=ob_clr, alpha=0.9))
+
+    # FVG zone
+    if sig.get("fvg_zone"):
+        fvg_low, fvg_high, fvg_idx = sig["fvg_zone"]
+        ax.axhspan(fvg_low, fvg_high, alpha=0.15, color="#5eb0e8", zorder=0)
+        local = fvg_idx - start
+        if 0 <= local < len(show):
+            ax.text(local, fvg_high, " FVG",
+                    color="#5eb0e8", fontsize=9, fontweight="bold",
+                    va="bottom", ha="left")
+
+    arrow = "▲" if direction == "LONG" else "▼"
+    ax.set_title(
+        f"AlphaDXB | {coin}/USDT  {arrow} {direction} bias  —  4H Price Action",
+        color="#FFD700", fontsize=14, fontweight="bold", pad=15,
+    )
+    ax.text(0.5, 1.005,
+            "Full Entry / SL / TP available in VIP channel",
+            transform=ax.transAxes, color="#8b949e", fontsize=9,
+            ha="center", va="bottom")
+
+    ax.grid(color="#1e2d3d", linewidth=0.5, alpha=0.5)
+    ax.tick_params(colors="#8b949e", labelsize=8)
+    ax.set_xticks([])
+    ax.yaxis.tick_right()
+    for s in ["top", "left"]:
+        ax.spines[s].set_visible(False)
+    for s in ["bottom", "right"]:
+        ax.spines[s].set_color("#30363d")
+
+    fig.text(0.5, 0.5, "AlphaDXB", fontsize=55, color="white", alpha=0.05,
+             ha="center", va="center", fontweight="bold", rotation=30)
+
+    plt.tight_layout(pad=2)
+    buf = BytesIO()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="#0d1117")
+    buf.seek(0)
+    plt.close(fig)
+    return buf.read()
+
+
+def format_public_teaser(sig, vip_link: str = "") -> str:
+    coin = sig["symbol"].replace("USDT", "")
+    direction = sig["direction"]
+    arrow = "🟢" if direction == "LONG" else "🔴"
+    ob_lo, ob_hi = sig["ob_zone"]
+    bias_word = "Bullish" if direction == "LONG" else "Bearish"
+    confluences = "\n".join(
+        f"✓ {k}" for k, v in sig["confluences"].items() if v and "R:R" not in k
+    )
+    vip_call = (
+        f"🔓 Full Entry / SL / TP details available in our VIP channel:\n👉 {vip_link}"
+        if vip_link else
+        "🔓 Full Entry / SL / TP details available in our VIP channel."
+    )
+
+    return f"""{arrow} <b>Price Action Setup — {coin}/USDT</b>
+
+📍 Direction: <b>{bias_word} bias (4H)</b>
+📦 Watch zone: ${ob_lo:,.2f} – ${ob_hi:,.2f}
+
+<b>Why this level matters:</b>
+{confluences}
+
+⚠️ This is a notable price-action level — <b>not financial advice</b>. Always do your own research.
+
+{vip_call}
+
+🇦🇪 AlphaDXB | Dubai Crypto Signals
+#{coin.lower()} #priceaction #crypto #AlphaDXB"""
+
+
 # ---------- Format & post ----------
 
 def format_signal_message(sig):
@@ -702,9 +819,79 @@ def format_signal_message(sig):
 #{coin.lower()} #crypto #SMC #orderblock #signals #AlphaDXB"""
 
 
+# ---------- Manual test helper ----------
+
+def send_test_signal(telegram_token: str, vip_channel: str, symbol: str = "BTCUSDT") -> None:
+    """Build a synthetic but realistic signal + chart and post it to VIP.
+
+    Useful to verify the pipeline (chart rendering, photo upload, channel
+    delivery) without waiting for a real setup. The signal is clearly marked
+    as TEST in the caption so subscribers don't trade it.
+    """
+    print(f"[VIP] Building TEST signal for {symbol}...")
+    candles = get_klines(symbol, LTF_INTERVAL, LTF_LIMIT)
+    if not candles or len(candles) < 60:
+        print("[VIP] ❌ TEST: could not fetch candles")
+        _send(telegram_token, vip_channel,
+              "🧪 <b>TEST SIGNAL</b>\nCould not fetch market data right now.")
+        return
+
+    atr = calc_atr(candles) or candles[-1]["close"] * 0.01
+    price = candles[-1]["close"]
+    # Pick a synthetic OB just below current price, ~1% wide
+    ob_high = price * 0.995
+    ob_low  = price * 0.985
+    sl   = ob_low - atr * SL_BUFFER_ATR
+    risk = price - sl
+    tp1  = price + risk * TP1_RR
+    tp2  = price + risk * TP2_RR
+
+    swing_highs, swing_lows = find_swings(candles, left=2, right=2)
+    fvg_zone = latest_fvg_zone(candles, "bullish", lookback=15)
+
+    fake_sig = {
+        "direction": "LONG",
+        "symbol": symbol,
+        "price": price,
+        "entry": price,
+        "sl": sl,
+        "tp1": tp1,
+        "tp2": tp2,
+        "ob_zone": (ob_low, ob_high),
+        "ob_index": len(candles) - 5,
+        "fvg_zone": fvg_zone,
+        "candles": candles,
+        "swing_highs": swing_highs,
+        "swing_lows": swing_lows,
+        "confluences": {
+            "HTF bias bullish": True,
+            "Active bullish OB": True,
+            "Reaction inside zone": True,
+            "Bullish FVG nearby": fvg_zone is not None,
+            "R:R ≥ 1:2": True,
+        },
+        "pattern": "Bullish Engulfing",
+    }
+
+    test_caption = "🧪 <b>TEST SIGNAL — DO NOT TRADE</b>\nPipeline / chart visualization check.\n\n" + \
+                   format_signal_message(fake_sig)
+
+    try:
+        chart = build_signal_chart(fake_sig)
+        _send_photo(telegram_token, vip_channel, chart, test_caption)
+    except Exception as e:
+        print(f"[VIP] ❌ TEST chart error: {e}")
+        _send(telegram_token, vip_channel, test_caption)
+
+
 # ---------- Public entry point ----------
 
-def scan_and_post(telegram_token: str, vip_channel: str) -> None:
+def scan_and_post(telegram_token: str, vip_channel: str,
+                  public_channel: str = "", vip_link: str = "") -> None:
+    """Scan for setups. When one fires:
+       - full chart + caption → vip_channel
+       - teaser chart + teaser caption → public_channel (if provided)
+    """
     state  = _load_state()
     now_ts = datetime.now().timestamp()
     cooldown = COOLDOWN_HOURS * 3600
@@ -720,24 +907,34 @@ def scan_and_post(telegram_token: str, vip_channel: str) -> None:
         except Exception as e:
             print(f"[VIP]   {coin}: detect error: {e}")
             continue
-        if sig:
-            print(f"[VIP]   {coin}: {sig['direction']} @ ${sig['price']:,.2f} "
-                  f"(OB ${sig['ob_zone'][0]:,.2f}–${sig['ob_zone'][1]:,.2f})")
-            caption = format_signal_message(sig)
-            try:
-                chart_bytes = build_signal_chart(sig)
-            except Exception as e:
-                print(f"[VIP]   {coin}: chart build failed: {e} — sending text-only")
-                chart_bytes = None
-            if chart_bytes:
-                _send_photo(telegram_token, vip_channel, chart_bytes, caption)
-            else:
-                _send(telegram_token, vip_channel, caption)
-            state[coin] = {
-                "timestamp": now_ts,
-                "direction": sig["direction"],
-                "entry": sig["entry"],
-            }
-            _save_state(state)
-        else:
+        if not sig:
             print(f"[VIP]   {coin}: no setup")
+            continue
+
+        print(f"[VIP]   {coin}: {sig['direction']} @ ${sig['price']:,.2f} "
+              f"(OB ${sig['ob_zone'][0]:,.2f}–${sig['ob_zone'][1]:,.2f})")
+
+        # 1) Full signal → VIP
+        vip_caption = format_signal_message(sig)
+        try:
+            vip_chart = build_signal_chart(sig)
+            _send_photo(telegram_token, vip_channel, vip_chart, vip_caption)
+        except Exception as e:
+            print(f"[VIP]   {coin}: VIP chart build failed: {e} — text only")
+            _send(telegram_token, vip_channel, vip_caption)
+
+        # 2) Teaser → public (if a public channel was provided)
+        if public_channel:
+            try:
+                teaser_caption = format_public_teaser(sig, vip_link=vip_link)
+                teaser_chart   = build_teaser_chart(sig)
+                _send_photo(telegram_token, public_channel, teaser_chart, teaser_caption)
+            except Exception as e:
+                print(f"[VIP]   {coin}: teaser failed: {e}")
+
+        state[coin] = {
+            "timestamp": now_ts,
+            "direction": sig["direction"],
+            "entry": sig["entry"],
+        }
+        _save_state(state)
