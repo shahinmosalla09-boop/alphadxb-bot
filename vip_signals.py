@@ -18,6 +18,7 @@ Public API:
 """
 
 import json
+import time
 from datetime import datetime
 
 import requests
@@ -51,21 +52,29 @@ MAX_SL_PCT       = 0.05   # never accept a setup whose SL is > 5% from entry
 REQUIRED_CONFLUENCES = 4  # of 5 (HTF, OB, mitigation+pattern, FVG, R:R)
 
 
-# ---------- Telegram ----------
+# ---------- Telegram (with retry) ----------
 
-def _send(token: str, channel: str, text: str) -> None:
+def _send(token: str, channel: str, text: str, retries: int = 3) -> bool:
+    """Send a Telegram message, retrying transient failures with backoff.
+
+    Returns True on success, False after all retries fail. 4xx (e.g. bad
+    chat_id) is treated as permanent — we don't retry those.
+    """
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    try:
-        r = requests.post(
-            url,
-            json={"chat_id": channel, "text": text, "parse_mode": "HTML"},
-            timeout=10,
-        )
-        print(f"[VIP] Send: {r.status_code}")
-        if r.status_code != 200:
-            print(f"[VIP]   Body: {r.text[:200]}")
-    except Exception as e:
-        print(f"[VIP] ❌ Send error: {e}")
+    payload = {"chat_id": channel, "text": text, "parse_mode": "HTML"}
+    for attempt in range(1, retries + 1):
+        try:
+            r = requests.post(url, json=payload, timeout=10)
+            print(f"[VIP] Send attempt {attempt}: {r.status_code}")
+            if r.status_code == 200:
+                return True
+            if 400 <= r.status_code < 500:
+                print(f"[VIP]   Body: {r.text[:200]} (4xx — not retrying)")
+                return False
+        except Exception as e:
+            print(f"[VIP] ❌ Send error attempt {attempt}: {e}")
+        time.sleep(2 ** attempt)  # 2s, 4s, 8s
+    return False
 
 
 # ---------- Market data (KuCoin, no US block) ----------
@@ -77,43 +86,53 @@ _KUCOIN_INTERVAL = {
 }
 
 
-def get_klines(symbol: str, interval: str, limit: int = 100):
-    """KuCoin format per row: [time(s), open, close, high, low, volume, turnover]."""
+def get_klines(symbol: str, interval: str, limit: int = 100, retries: int = 3):
+    """Fetch OHLCV from KuCoin with retry. Returns None on permanent failure."""
     kucoin_interval = _KUCOIN_INTERVAL.get(interval, interval)
     if symbol.endswith("USDT"):
         kucoin_symbol = f"{symbol[:-4]}-USDT"
     else:
         kucoin_symbol = symbol
-    try:
-        r = requests.get(
-            "https://api.kucoin.com/api/v1/market/candles",
-            params={"type": kucoin_interval, "symbol": kucoin_symbol},
-            timeout=15,
-        )
-        if r.status_code != 200:
-            print(f"[VIP] ❌ KuCoin {symbol} {interval}: HTTP {r.status_code}")
-            return None
-        data = r.json()
-        if data.get("code") != "200000":
-            print(f"[VIP] ❌ KuCoin {symbol} {interval}: {data.get('msg')}")
-            return None
-        rows = list(reversed(data.get("data", []) or []))
-        if len(rows) > limit:
-            rows = rows[-limit:]
-        return [
-            {
-                "time":   datetime.fromtimestamp(int(k[0])),
-                "open":   float(k[1]),
-                "close":  float(k[2]),
-                "high":   float(k[3]),
-                "low":    float(k[4]),
-                "volume": float(k[5]),
-            }
-            for k in rows
-        ]
-    except Exception as e:
-        print(f"[VIP] ❌ KuCoin error {symbol}: {e}")
-        return None
+
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            r = requests.get(
+                "https://api.kucoin.com/api/v1/market/candles",
+                params={"type": kucoin_interval, "symbol": kucoin_symbol},
+                timeout=15,
+            )
+            if r.status_code != 200:
+                last_err = f"HTTP {r.status_code}"
+                # 4xx is usually a bad request (won't fix itself), 5xx might
+                if 400 <= r.status_code < 500:
+                    print(f"[VIP] ❌ KuCoin {symbol} {interval}: {last_err} (4xx, not retrying)")
+                    return None
+            else:
+                data = r.json()
+                if data.get("code") != "200000":
+                    print(f"[VIP] ❌ KuCoin {symbol} {interval}: {data.get('msg')}")
+                    return None
+                rows = list(reversed(data.get("data", []) or []))
+                if len(rows) > limit:
+                    rows = rows[-limit:]
+                return [
+                    {
+                        "time":   datetime.fromtimestamp(int(k[0])),
+                        "open":   float(k[1]),
+                        "close":  float(k[2]),
+                        "high":   float(k[3]),
+                        "low":    float(k[4]),
+                        "volume": float(k[5]),
+                    }
+                    for k in rows
+                ]
+        except Exception as e:
+            last_err = str(e)
+        if attempt < retries:
+            time.sleep(2 ** attempt)  # 2s, 4s
+    print(f"[VIP] ❌ KuCoin {symbol} {interval}: failed after {retries} attempts ({last_err})")
+    return None
 
 
 # ---------- ATR ----------
