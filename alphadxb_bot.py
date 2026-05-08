@@ -10,6 +10,8 @@ import schedule
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
+# VIP signal engine — all swing-trade logic lives in this separate file
 import vip_signals
 
 # Auto-load values from a ".env" file in the same folder, if it exists.
@@ -440,8 +442,11 @@ def process_update(update):
         except Exception as e:
             print(f"❌ Forward error: {e}")
             send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"❌ Error: {e}")
-    elif text and not text.startswith("/"):
-        formatted = format_analysis(text)
+    elif content and not content.startswith("/"):
+        # `content` already has the optional "/vip" prefix stripped, so a
+        # message like "/vip test" reaches this branch with content="test"
+        # and target=VIP_CHANNEL.
+        formatted = format_analysis(content)
         send_message(TELEGRAM_TOKEN, target, formatted)
         send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"✅ Posted to {target}!")
 
@@ -471,11 +476,14 @@ if __name__ == "__main__":
     morning_update()
     schedule.every().day.at("04:00").do(morning_update)
     schedule.every().day.at("16:00").do(evening_update)
-    # VIP swing-signal scanner — logic in vip_signals.py
+
+    # VIP swing-signal scanner — logic lives in vip_signals.py
     def _vip_scan():
         vip_signals.scan_and_post(TELEGRAM_TOKEN, VIP_CHANNEL)
+
     schedule.every().hour.do(_vip_scan)
-    threading.Timer(60.0, _vip_scan).start()
+    threading.Timer(60.0, _vip_scan).start()  # also run once 60s after startup
+
     print("Bot is running!")
     while True:
         schedule.run_pending()
