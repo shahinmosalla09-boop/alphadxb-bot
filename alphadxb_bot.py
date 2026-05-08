@@ -69,6 +69,7 @@ ADMIN_BOT_TOKEN  = _require_env("ADMIN_BOT_TOKEN")      # admin bot — receives
 ADMIN_CHAT_ID    = _require_int_env("ADMIN_CHAT_ID")    # numeric chat id of the admin
 PUBLIC_CHANNEL   = _require_env("PUBLIC_CHANNEL")       # e.g. @AlphaDXBcrypto
 VIP_CHANNEL      = _require_env("VIP_CHANNEL")          # e.g. @AlphaDXBcryptoPRO
+VIP_LINK         = os.environ.get("VIP_LINK", "").strip()  # optional invite link for teaser CTA
 
 
 # ---------- Telegram helpers (with retry) ----------
@@ -302,34 +303,42 @@ def morning_update():
                 f"Break above ${resistances[0]:,.0f} -> Bullish\n"
                 f"Break below ${supports[0]:,.0f} -> Bearish"
             )
-        caption = f"""GM! AlphaDXB Morning Update
+        caption = f"""📊 <b>AlphaDXB Morning Brief</b>
 {date_str}
+
 BTC: ${btc:,.0f}
 ETH: ${eth:,.0f}
 BNB: ${bnb:,.0f}
 SOL: ${sol:,.2f}
+
 Sentiment: {fg_label.upper()} ({fg_val})
-BTC 4H Analysis:
+
+<b>BTC 4H Analysis</b>
 Resistance: ${resistances[0]:,.0f}
 Support: ${supports[0]:,.0f}
 Bias: {bias}
-Scenarios:
+
+<b>Scenarios</b>
 {scenario}
-Full signals -> {VIP_CHANNEL}
+
+🎯 Full SMC signals available in our VIP channel.
 #crypto #bitcoin #dubai #AlphaDXB"""
         if chart:
             send_photo(PUBLIC_CHANNEL, chart, caption)
         else:
             send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, caption)
     else:
-        msg = f"""GM! AlphaDXB Morning Update
+        msg = f"""📊 <b>AlphaDXB Morning Brief</b>
 {date_str}
+
 BTC: ${btc:,.0f}
 ETH: ${eth:,.0f}
 BNB: ${bnb:,.0f}
 SOL: ${sol:,.2f}
+
 Sentiment: {fg_label.upper()} ({fg_val})
-Full signals -> {VIP_CHANNEL}
+
+🎯 Full SMC signals in our VIP channel.
 #crypto #bitcoin #dubai #AlphaDXB"""
         send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, msg)
 
@@ -345,16 +354,35 @@ def evening_update():
     eth = prices.get("ETH", 0)
     bnb = prices.get("BNB", 0)
     sol = prices.get("SOL", 0)
-    msg = f"""AlphaDXB Daily Wrap-Up
+
+    ohlc = get_ohlc()
+    chart = None
+    sup_str, res_str = "", ""
+    if ohlc:
+        supports, resistances = find_levels(ohlc)
+        try:
+            chart = create_chart(ohlc, supports, resistances)
+            sup_str = f"\nSupport: ${supports[0]:,.0f}"
+            res_str = f"\nResistance: ${resistances[0]:,.0f}"
+        except Exception as e:
+            print(f"❌ Chart error: {e}")
+
+    caption = f"""🌙 <b>AlphaDXB Evening Wrap</b>
 {date_str}
+
 BTC: ${btc:,.0f}
 ETH: ${eth:,.0f}
 BNB: ${bnb:,.0f}
 SOL: ${sol:,.2f}
-Sentiment: {fg_label.upper()} ({fg_val})
-Tomorrow's signals -> {VIP_CHANNEL}
+
+Sentiment: {fg_label.upper()} ({fg_val}){res_str}{sup_str}
+
+🎯 Tomorrow's full SMC signals in our VIP channel.
 #crypto #bitcoin #dubai #AlphaDXB"""
-    send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, msg)
+    if chart:
+        send_photo(PUBLIC_CHANNEL, chart, caption)
+    else:
+        send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, caption)
 
 
 # ---------- Admin bot ----------
@@ -538,9 +566,15 @@ if __name__ == "__main__":
     schedule.every().day.at("04:00").do(lambda: _safe("morning_update", morning_update))
     schedule.every().day.at("16:00").do(lambda: _safe("evening_update", evening_update))
 
-    # VIP swing-signal scanner — logic lives in vip_signals.py
+    # VIP swing-signal scanner — logic lives in vip_signals.py.
+    # Posts the full setup to VIP and a teaser to PUBLIC on each match.
     def _vip_scan():
-        _safe("vip_scan", lambda: vip_signals.scan_and_post(TELEGRAM_TOKEN, VIP_CHANNEL))
+        _safe("vip_scan", lambda: vip_signals.scan_and_post(
+            TELEGRAM_TOKEN,
+            VIP_CHANNEL,
+            public_channel=PUBLIC_CHANNEL,
+            vip_link=VIP_LINK,
+        ))
 
     schedule.every().hour.do(_vip_scan)
     threading.Timer(60.0, _vip_scan).start()  # also run once 60s after startup
