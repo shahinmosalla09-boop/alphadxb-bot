@@ -71,52 +71,92 @@ PUBLIC_CHANNEL   = _require_env("PUBLIC_CHANNEL")       # e.g. @AlphaDXBcrypto
 VIP_CHANNEL      = _require_env("VIP_CHANNEL")          # e.g. @AlphaDXBcryptoPRO
 
 
-# ---------- Telegram helpers ----------
+# ---------- Telegram helpers (with retry) ----------
 
-def send_message(token: str, channel, text: str) -> None:
+def send_message(token: str, channel, text: str, retries: int = 3) -> bool:
+    """Send a Telegram message with simple exponential-backoff retry.
+
+    Returns True on success, False after all retries fail. Logs every attempt.
+    """
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": channel, "text": text, "parse_mode": "HTML"}
-    try:
-        r = requests.post(url, json=payload, timeout=10)
-        print(f"✅ Message: {r.status_code}")
-    except Exception as e:
-        print(f"❌ Error: {e}")
+    for attempt in range(1, retries + 1):
+        try:
+            r = requests.post(url, json=payload, timeout=10)
+            print(f"✅ Message attempt {attempt}: {r.status_code}")
+            if r.status_code == 200:
+                return True
+            # 4xx errors are usually permanent (bad chat_id, format) — don't retry forever
+            if 400 <= r.status_code < 500:
+                print(f"❌ Telegram 4xx, will not retry: {r.text[:200]}")
+                return False
+        except Exception as e:
+            print(f"❌ Send error attempt {attempt}: {e}")
+        time.sleep(2 ** attempt)  # 2s, 4s, 8s
+    return False
 
 
-def send_photo(channel, photo_bytes: bytes, caption: str = "") -> None:
+def send_photo(channel, photo_bytes: bytes, caption: str = "", retries: int = 3) -> bool:
+    """Send a photo with retry. Falls back to text-only on failure."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-    try:
-        r = requests.post(
-            url,
-            files={"photo": ("chart.png", BytesIO(photo_bytes), "image/png")},
-            data={"chat_id": channel, "caption": caption, "parse_mode": "HTML"},
-            timeout=60,
-        )
-        print(f"✅ Photo: {r.status_code}")
-        if r.status_code != 200:
-            send_message(TELEGRAM_TOKEN, channel, caption)
-    except Exception as e:
-        print(f"❌ Photo error: {e}")
-        send_message(TELEGRAM_TOKEN, channel, caption)
+    for attempt in range(1, retries + 1):
+        try:
+            r = requests.post(
+                url,
+                files={"photo": ("chart.png", BytesIO(photo_bytes), "image/png")},
+                data={"chat_id": channel, "caption": caption, "parse_mode": "HTML"},
+                timeout=60,
+            )
+            print(f"✅ Photo attempt {attempt}: {r.status_code}")
+            if r.status_code == 200:
+                return True
+            if 400 <= r.status_code < 500:
+                print(f"❌ Telegram 4xx photo, falling back to text: {r.text[:200]}")
+                return send_message(TELEGRAM_TOKEN, channel, caption)
+        except Exception as e:
+            print(f"❌ Photo error attempt {attempt}: {e}")
+        time.sleep(2 ** attempt)
+    # All retries failed → fall back to text
+    print("⚠️ Photo retries exhausted, sending caption as text")
+    return send_message(TELEGRAM_TOKEN, channel, caption)
 
 
 # ---------- Market data ----------
 
+def _get_with_retry(url: str, params=None, retries: int = 3, timeout: int = 10):
+    """Tiny helper that retries an HTTP GET with exponential backoff."""
+    for attempt in range(1, retries + 1):
+        try:
+            r = requests.get(url, params=params, timeout=timeout)
+            if r.status_code == 200:
+                return r
+            print(f"⚠️ HTTP {r.status_code} on {url} (attempt {attempt})")
+        except Exception as e:
+            print(f"⚠️ HTTP error {url} attempt {attempt}: {e}")
+        time.sleep(2 ** attempt)
+    return None
+
+
 def get_prices():
-    try:
-        symbols = {"BTC": "XXBTZUSD", "ETH": "XETHZUSD", "SOL": "SOLUSD", "BNB": "BNBUSD"}
-        prices = {}
-        for coin, pair in symbols.items():
-            r = requests.get(f"https://api.kraken.com/0/public/Ticker?pair={pair}", timeout=10)
+    """Pull spot prices from Kraken with retry per symbol."""
+    symbols = {"BTC": "XXBTZUSD", "ETH": "XETHZUSD", "SOL": "SOLUSD", "BNB": "BNBUSD"}
+    prices = {}
+    for coin, pair in symbols.items():
+        try:
+            r = _get_with_retry(
+                f"https://api.kraken.com/0/public/Ticker?pair={pair}",
+                retries=2,
+            )
+            if r is None:
+                continue
             data = r.json()
             if not data.get("error"):
                 result = data["result"]
                 key = list(result.keys())[0]
                 prices[coin] = float(result[key]["c"][0])
-        return prices if len(prices) >= 3 else None
-    except Exception as e:
-        print(f"❌ Price error: {e}")
-        return None
+        except Exception as e:
+            print(f"❌ Price error for {coin}: {e}")
+    return prices if len(prices) >= 3 else None
 
 
 def get_fear_greed():
@@ -452,40 +492,71 @@ def process_update(update):
 
 
 def run_admin_bot():
+    """Admin-bot polling loop. Survives transient errors and keeps running."""
     print("Admin Bot Starting...")
     offset = 0
+    consecutive_errors = 0
     while True:
         try:
             url = f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}/getUpdates"
             r = requests.get(url, params={"offset": offset, "timeout": 30}, timeout=35)
-            updates = r.json().get("result", [])
+            updates = r.json().get("result", []) if r.status_code == 200 else []
             for update in updates:
-                process_update(update)
+                try:
+                    process_update(update)
+                except Exception as inner:
+                    # An error inside one update should not kill the whole loop.
+                    print(f"❌ process_update error: {inner}")
                 offset = update["update_id"] + 1
+            consecutive_errors = 0
         except Exception as e:
-            print(f"❌ Admin error: {e}")
-            time.sleep(5)
+            consecutive_errors += 1
+            print(f"❌ Admin loop error #{consecutive_errors}: {e}")
+            # Back off harder if errors persist (5s, 10s, 20s, 40s, max 60s)
+            time.sleep(min(5 * (2 ** min(consecutive_errors - 1, 4)), 60))
 
 
 # ---------- Entry point ----------
+
+def _safe(label: str, fn):
+    """Call fn() but never propagate an exception out of the schedule loop."""
+    try:
+        fn()
+    except Exception as e:
+        print(f"❌ {label} crashed: {e}")
+
 
 if __name__ == "__main__":
     print("AlphaDXB Bot Starting...")
     admin_thread = threading.Thread(target=run_admin_bot, daemon=True)
     admin_thread.start()
-    morning_update()
-    schedule.every().day.at("04:00").do(morning_update)
-    schedule.every().day.at("16:00").do(evening_update)
+
+    # Initial morning post on cold start, behind a try/except.
+    _safe("startup morning_update", morning_update)
+
+    # Wrap scheduled jobs so a crash in one doesn't halt the scheduler.
+    schedule.every().day.at("04:00").do(lambda: _safe("morning_update", morning_update))
+    schedule.every().day.at("16:00").do(lambda: _safe("evening_update", evening_update))
 
     # VIP swing-signal scanner — logic lives in vip_signals.py
     def _vip_scan():
-        vip_signals.scan_and_post(TELEGRAM_TOKEN, VIP_CHANNEL)
+        _safe("vip_scan", lambda: vip_signals.scan_and_post(TELEGRAM_TOKEN, VIP_CHANNEL))
 
     schedule.every().hour.do(_vip_scan)
     threading.Timer(60.0, _vip_scan).start()  # also run once 60s after startup
 
+    # Heartbeat every 6 hours so the log shows the process is alive even when
+    # nothing else is happening.
+    schedule.every(6).hours.do(lambda: print(
+        f"💓 Heartbeat {datetime.now().strftime('%Y-%m-%d %H:%M')}"))
+
     print("Bot is running!")
+    # Main scheduler loop. Wrapped so an unexpected error in one tick doesn't
+    # take the whole process down — Railway would restart anyway, but this
+    # keeps us alive through transient hiccups (DNS blips, schedule lib bugs).
     while True:
-        schedule.run_pending()
+        try:
+            schedule.run_pending()
+        except Exception as e:
+            print(f"❌ Scheduler tick error: {e}")
         time.sleep(30)
-        print(f"{datetime.now().strftime('%H:%M:%S')} - Waiting...", end="\r")
