@@ -20,8 +20,13 @@ Public API:
 import json
 import time
 from datetime import datetime
+from io import BytesIO
 
 import requests
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 
 
 # ---------- Tweakable settings ----------
@@ -55,11 +60,6 @@ REQUIRED_CONFLUENCES = 4  # of 5 (HTF, OB, mitigation+pattern, FVG, R:R)
 # ---------- Telegram (with retry) ----------
 
 def _send(token: str, channel: str, text: str, retries: int = 3) -> bool:
-    """Send a Telegram message, retrying transient failures with backoff.
-
-    Returns True on success, False after all retries fail. 4xx (e.g. bad
-    chat_id) is treated as permanent — we don't retry those.
-    """
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": channel, "text": text, "parse_mode": "HTML"}
     for attempt in range(1, retries + 1):
@@ -73,8 +73,33 @@ def _send(token: str, channel: str, text: str, retries: int = 3) -> bool:
                 return False
         except Exception as e:
             print(f"[VIP] ❌ Send error attempt {attempt}: {e}")
-        time.sleep(2 ** attempt)  # 2s, 4s, 8s
+        time.sleep(2 ** attempt)
     return False
+
+
+def _send_photo(token: str, channel: str, photo_bytes: bytes, caption: str,
+                retries: int = 3) -> bool:
+    """Post a photo with caption to Telegram. Falls back to text-only on failure."""
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    for attempt in range(1, retries + 1):
+        try:
+            r = requests.post(
+                url,
+                files={"photo": ("signal.png", BytesIO(photo_bytes), "image/png")},
+                data={"chat_id": channel, "caption": caption, "parse_mode": "HTML"},
+                timeout=60,
+            )
+            print(f"[VIP] Photo attempt {attempt}: {r.status_code}")
+            if r.status_code == 200:
+                return True
+            if 400 <= r.status_code < 500:
+                print(f"[VIP]   Photo 4xx body: {r.text[:200]} → falling back to text")
+                return _send(token, channel, caption)
+        except Exception as e:
+            print(f"[VIP] ❌ Photo error attempt {attempt}: {e}")
+        time.sleep(2 ** attempt)
+    print("[VIP] ⚠️ Photo retries exhausted → text fallback")
+    return _send(token, channel, caption)
 
 
 # ---------- Market data (KuCoin, no US block) ----------
@@ -287,13 +312,22 @@ def find_fvgs(candles):
 
 
 def has_recent_fvg(candles, direction: str, lookback: int = 10) -> bool:
-    """True if a same-direction FVG formed in the last `lookback` candles."""
     fvgs = find_fvgs(candles)
     n = len(candles)
     for fvg in fvgs[-15:]:
         if fvg["type"] == direction and (n - 1 - fvg["index"]) <= lookback:
             return True
     return False
+
+
+def latest_fvg_zone(candles, direction: str, lookback: int = 10):
+    """Return (low, high, index) of the most recent same-direction FVG, or None."""
+    fvgs = find_fvgs(candles)
+    n = len(candles)
+    for fvg in reversed(fvgs[-20:]):
+        if fvg["type"] == direction and (n - 1 - fvg["index"]) <= lookback:
+            return (fvg["low"], fvg["high"], fvg["index"])
+    return None
 
 
 # ---------- Candlestick patterns (entry confirmation) ----------
@@ -398,7 +432,6 @@ def detect_signal(symbol: str):
 
     # ---- LONG side ----
     if bias == "bullish":
-        # 1) Find a fresh bullish OB whose zone the current price is inside
         bull_obs = [ob for ob in obs if ob["type"] == "bullish"]
         active_ob = None
         for ob in sorted(bull_obs, key=lambda x: x["index"], reverse=True):
@@ -408,15 +441,13 @@ def detect_signal(symbol: str):
         if not active_ob:
             return None
 
-        # 2) Candle reaction inside / off the zone
         pat = bullish_pattern(prev, last)
         green_close = last["close"] > last["open"] and last["close"] > prev["close"]
         reaction = pat is not None or green_close
 
-        # 3) Recent bullish FVG above the OB (confluence)
         fvg = has_recent_fvg(candles_ltf, "bullish", lookback=10)
+        fvg_zone = latest_fvg_zone(candles_ltf, "bullish", lookback=10)
 
-        # 4) Compute SL / TPs
         sl   = active_ob["low"] - atr * SL_BUFFER_ATR
         risk = price - sl
         if risk <= 0:
@@ -426,10 +457,9 @@ def detect_signal(symbol: str):
 
         targets = liquidity_targets(candles_ltf, "LONG")
         tp1_natural = targets[0] if targets else price + risk * TP1_RR
-        tp1 = max(tp1_natural, price + risk * TP1_RR)  # at minimum 1:2
+        tp1 = max(tp1_natural, price + risk * TP1_RR)
         tp2 = price + risk * TP2_RR
 
-        # 5) Confluence count
         confluences = {
             "HTF bias bullish": True,
             "Active bullish OB": True,
@@ -441,6 +471,7 @@ def detect_signal(symbol: str):
         if score < REQUIRED_CONFLUENCES:
             return None
 
+        swing_highs, swing_lows = find_swings(candles_ltf, left=2, right=2)
         return {
             "direction": "LONG",
             "symbol": symbol,
@@ -450,6 +481,11 @@ def detect_signal(symbol: str):
             "tp1": tp1,
             "tp2": tp2,
             "ob_zone": (active_ob["low"], active_ob["high"]),
+            "ob_index": active_ob["index"],
+            "fvg_zone": fvg_zone,
+            "candles": candles_ltf,
+            "swing_highs": swing_highs,
+            "swing_lows": swing_lows,
             "confluences": confluences,
             "pattern": pat,
         }
@@ -470,6 +506,7 @@ def detect_signal(symbol: str):
         reaction = pat is not None or red_close
 
         fvg = has_recent_fvg(candles_ltf, "bearish", lookback=10)
+        fvg_zone = latest_fvg_zone(candles_ltf, "bearish", lookback=10)
 
         sl   = active_ob["high"] + atr * SL_BUFFER_ATR
         risk = sl - price
@@ -494,6 +531,7 @@ def detect_signal(symbol: str):
         if score < REQUIRED_CONFLUENCES:
             return None
 
+        swing_highs, swing_lows = find_swings(candles_ltf, left=2, right=2)
         return {
             "direction": "SHORT",
             "symbol": symbol,
@@ -503,11 +541,123 @@ def detect_signal(symbol: str):
             "tp1": tp1,
             "tp2": tp2,
             "ob_zone": (active_ob["low"], active_ob["high"]),
+            "ob_index": active_ob["index"],
+            "fvg_zone": fvg_zone,
+            "candles": candles_ltf,
+            "swing_highs": swing_highs,
+            "swing_lows": swing_lows,
             "confluences": confluences,
             "pattern": pat,
         }
 
     return None
+
+
+# ---------- Chart drawing ----------
+
+def build_signal_chart(sig) -> bytes:
+    """Render a chart that visually explains the setup.
+
+    Marks: candlesticks, the Order Block zone, the FVG zone (if any),
+    Entry/SL/TP1/TP2 horizontal lines, and the OB-origin candle.
+    """
+    candles = sig["candles"]
+    direction = sig["direction"]
+    coin = sig["symbol"].replace("USDT", "")
+    ob_low, ob_high = sig["ob_zone"]
+    ob_idx_global = sig["ob_index"]
+
+    # Show last N candles (centered around the OB so it's always visible).
+    show_n = 70
+    n = len(candles)
+    start = max(0, min(n - show_n, ob_idx_global - 10))
+    end = n
+    show = candles[start:end]
+    ob_idx = ob_idx_global - start  # local index
+
+    plt.style.use("dark_background")
+    fig, ax = plt.subplots(figsize=(13, 8))
+    fig.patch.set_facecolor("#0d1117")
+    ax.set_facecolor("#0d1117")
+
+    bull_clr, bear_clr = "#26a69a", "#ef5350"
+
+    # Candlesticks
+    for i, c in enumerate(show):
+        clr = bull_clr if c["close"] >= c["open"] else bear_clr
+        ax.plot([i, i], [c["low"], c["high"]], color=clr, linewidth=1.0)
+        body_h = abs(c["close"] - c["open"]) or (c["high"] - c["low"]) * 0.01
+        ax.bar(i, body_h, bottom=min(c["open"], c["close"]),
+               color=clr, width=0.7, alpha=0.95)
+
+    x_right = len(show) + 12
+    ax.set_xlim(-1, x_right)
+
+    # OB zone — strong color band
+    ob_clr = bull_clr if direction == "LONG" else bear_clr
+    ax.axhspan(ob_low, ob_high, alpha=0.18, color=ob_clr, zorder=0)
+    # Mark the OB origin candle
+    if 0 <= ob_idx < len(show):
+        ax.scatter([ob_idx], [(ob_low + ob_high) / 2],
+                   marker="o", s=120, edgecolors=ob_clr,
+                   facecolors="none", linewidths=2, zorder=5)
+    ax.text(x_right - 1, (ob_low + ob_high) / 2,
+            f" OB ${ob_low:,.0f}–${ob_high:,.0f}",
+            color=ob_clr, fontsize=10, fontweight="bold",
+            va="center", ha="right")
+
+    # FVG zone
+    if sig.get("fvg_zone"):
+        fvg_low, fvg_high, fvg_idx = sig["fvg_zone"]
+        ax.axhspan(fvg_low, fvg_high, alpha=0.15, color="#5eb0e8", zorder=0)
+        local = fvg_idx - start
+        if 0 <= local < len(show):
+            ax.text(local, fvg_high, " FVG",
+                    color="#5eb0e8", fontsize=9, fontweight="bold",
+                    va="bottom", ha="left")
+
+    # Entry / SL / TP lines
+    levels = [
+        (sig["entry"], "Entry", "#FFD700", "-",  1.6),
+        (sig["sl"],    "SL",    "#ef5350", "--", 1.6),
+        (sig["tp1"],   "TP1",   "#26a69a", "--", 1.4),
+        (sig["tp2"],   "TP2",   "#26a69a", ":",  1.2),
+    ]
+    for price_v, label, clr, ls, lw in levels:
+        ax.axhline(price_v, color=clr, linewidth=lw, linestyle=ls, alpha=0.95)
+        ax.text(x_right - 1, price_v, f" {label}: ${price_v:,.2f}",
+                color=clr, fontsize=9, fontweight="bold",
+                va="center", ha="right",
+                bbox=dict(boxstyle="round,pad=0.2", fc="#0d1117", ec=clr, alpha=0.9))
+
+    # Title + subtitle
+    arrow = "▲" if direction == "LONG" else "▼"
+    ax.set_title(f"AlphaDXB | {coin}/USDT  {arrow} {direction}  —  4H SMC Setup",
+                 color="#FFD700", fontsize=14, fontweight="bold", pad=15)
+    confluence_str = ", ".join(k for k, v in sig["confluences"].items() if v)
+    ax.text(0.5, 1.005, confluence_str, transform=ax.transAxes,
+            color="#8b949e", fontsize=8, ha="center", va="bottom")
+
+    # Cosmetics
+    ax.grid(color="#1e2d3d", linewidth=0.5, alpha=0.5)
+    ax.tick_params(colors="#8b949e", labelsize=8)
+    ax.set_xticks([])
+    ax.yaxis.tick_right()
+    for s in ["top", "left"]:
+        ax.spines[s].set_visible(False)
+    for s in ["bottom", "right"]:
+        ax.spines[s].set_color("#30363d")
+
+    # Watermark
+    fig.text(0.5, 0.5, "AlphaDXB", fontsize=55, color="white", alpha=0.05,
+             ha="center", va="center", fontweight="bold", rotation=30)
+
+    plt.tight_layout(pad=2)
+    buf = BytesIO()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="#0d1117")
+    buf.seek(0)
+    plt.close(fig)
+    return buf.read()
 
 
 # ---------- Format & post ----------
@@ -573,7 +723,16 @@ def scan_and_post(telegram_token: str, vip_channel: str) -> None:
         if sig:
             print(f"[VIP]   {coin}: {sig['direction']} @ ${sig['price']:,.2f} "
                   f"(OB ${sig['ob_zone'][0]:,.2f}–${sig['ob_zone'][1]:,.2f})")
-            _send(telegram_token, vip_channel, format_signal_message(sig))
+            caption = format_signal_message(sig)
+            try:
+                chart_bytes = build_signal_chart(sig)
+            except Exception as e:
+                print(f"[VIP]   {coin}: chart build failed: {e} — sending text-only")
+                chart_bytes = None
+            if chart_bytes:
+                _send_photo(telegram_token, vip_channel, chart_bytes, caption)
+            else:
+                _send(telegram_token, vip_channel, caption)
             state[coin] = {
                 "timestamp": now_ts,
                 "direction": sig["direction"],
