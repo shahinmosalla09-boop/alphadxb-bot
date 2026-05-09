@@ -8,13 +8,14 @@ Strategy:
   - Designed for short-term traders (hold a few hours to ~2 days)
 
 Includes a JSON-based signal journal:
-  - Every fired signal is recorded
+  - Every fired signal is recorded (with Telegram message_id for reply-back)
   - Open signals are checked periodically against current price
+  - When SL/TP is hit, a reply is posted to the original signal message
   - End of week, a performance report is posted to the public channel
 
 Public API:
     scan_and_post(telegram_token: str, public_channel: str) -> None
-    update_open_signals() -> None                     # call every ~30 min
+    update_open_signals(telegram_token: str = "") -> None   # call every ~30 min
     weekly_report(token, public_channel, admin_token=None, admin_id=None) -> None
 
 Edit at the top of this file to change watched coins, cooldowns, R:R, etc.
@@ -41,6 +42,7 @@ from vip_signals import (
     _send,
     _send_photo,
     build_signal_chart,
+    send_reply,
 )
 
 
@@ -73,20 +75,31 @@ def detect_1h_signal(symbol: str):
     candles_1h = get_klines(symbol, LTF_INTERVAL, LTF_LIMIT)
     candles_4h = get_klines(symbol, HTF_INTERVAL, HTF_LIMIT)
     if not candles_1h or len(candles_1h) < 60:
+        print(f"[PUB]   {symbol}: ❌ not enough 1H candles "
+              f"({len(candles_1h) if candles_1h else 0})")
         return None
     if not candles_4h or len(candles_4h) < 50:
+        print(f"[PUB]   {symbol}: ❌ not enough 4H candles "
+              f"({len(candles_4h) if candles_4h else 0})")
         return None
 
     bias = htf_bias(candles_4h)
     if bias == "neutral":
+        highs, lows = find_swings(candles_4h, left=2, right=2)
+        print(f"[PUB]   {symbol}: ❌ 4H bias neutral "
+              f"(swings — highs:{len(highs)}, lows:{len(lows)})")
         return None
+
+    print(f"[PUB]   {symbol}: 4H bias={bias}")
 
     atr_4h = calc_atr(candles_4h)
     atr_1h = calc_atr(candles_1h)
     if atr_4h is None or atr_1h is None:
+        print(f"[PUB]   {symbol}: ❌ ATR calculation failed")
         return None
 
     obs_4h = find_order_blocks(candles_4h, atr_4h)
+    print(f"[PUB]   {symbol}: found {len(obs_4h)} valid 4H OB(s)")
     last  = candles_1h[-1]
     prev  = candles_1h[-2]
     price = last["close"]
@@ -94,12 +107,20 @@ def detect_1h_signal(symbol: str):
     # ----- LONG side -----
     if bias == "bullish":
         bull_obs = [ob for ob in obs_4h if ob["type"] == "bullish"]
+        print(f"[PUB]   {symbol}: bullish 4H OBs={len(bull_obs)}, price=${price:,.2f}")
         active_ob = None
         for ob in sorted(bull_obs, key=lambda x: x["index"], reverse=True):
             if ob["low"] * 0.995 <= price <= ob["high"] * 1.01:
                 active_ob = ob
                 break
         if not active_ob:
+            if bull_obs:
+                nearest = sorted(bull_obs, key=lambda x: abs((x["low"]+x["high"])/2 - price))
+                ob0 = nearest[0]
+                print(f"[PUB]   {symbol}: ❌ price not in any bullish 4H OB "
+                      f"(nearest: ${ob0['low']:,.2f}–${ob0['high']:,.2f})")
+            else:
+                print(f"[PUB]   {symbol}: ❌ no active bullish 4H OBs found")
             return None
 
         pat = bullish_pattern(prev, last)
@@ -112,6 +133,8 @@ def detect_1h_signal(symbol: str):
         sl = recent_swing_low - atr_1h * SL_BUFFER_ATR
         risk = price - sl
         if risk <= 0 or risk / price > MAX_SL_PCT:
+            print(f"[PUB]   {symbol}: ❌ SL invalid "
+                  f"(risk={risk:.4f}, {risk/price*100:.2f}% vs max {MAX_SL_PCT*100:.1f}%)")
             return None
 
         tp1 = price + risk * TP1_RR
@@ -128,7 +151,11 @@ def detect_1h_signal(symbol: str):
             "1H bullish FVG":         fvg_present,
             "1H bullish close":       bullish_close,
         }
-        if sum(1 for v in confluences.values() if v) < REQUIRED_CONFLUENCES:
+        score = sum(1 for v in confluences.values() if v)
+        print(f"[PUB]   {symbol}: confluences {score}/{len(confluences)} — "
+              + ", ".join(f"{k}={'✅' if v else '❌'}" for k, v in confluences.items()))
+        if score < REQUIRED_CONFLUENCES:
+            print(f"[PUB]   {symbol}: ❌ insufficient confluences ({score} < {REQUIRED_CONFLUENCES})")
             return None
 
         swing_highs, swing_lows = find_swings(candles_1h, left=2, right=2)
@@ -141,7 +168,7 @@ def detect_1h_signal(symbol: str):
             "tp1":        tp1,
             "tp2":        tp2,
             "ob_zone":    (active_ob["low"], active_ob["high"]),
-            "ob_index":   len(candles_1h) - 1,        # mark at the entry candle on the 1H chart
+            "ob_index":   len(candles_1h) - 1,
             "fvg_zone":   latest_fvg_zone(candles_1h, "bullish", lookback=10),
             "candles":    candles_1h,
             "swing_highs": swing_highs,
@@ -154,12 +181,20 @@ def detect_1h_signal(symbol: str):
     # ----- SHORT side -----
     if bias == "bearish":
         bear_obs = [ob for ob in obs_4h if ob["type"] == "bearish"]
+        print(f"[PUB]   {symbol}: bearish 4H OBs={len(bear_obs)}, price=${price:,.2f}")
         active_ob = None
         for ob in sorted(bear_obs, key=lambda x: x["index"], reverse=True):
             if ob["low"] * 0.99 <= price <= ob["high"] * 1.005:
                 active_ob = ob
                 break
         if not active_ob:
+            if bear_obs:
+                nearest = sorted(bear_obs, key=lambda x: abs((x["low"]+x["high"])/2 - price))
+                ob0 = nearest[0]
+                print(f"[PUB]   {symbol}: ❌ price not in any bearish 4H OB "
+                      f"(nearest: ${ob0['low']:,.2f}–${ob0['high']:,.2f})")
+            else:
+                print(f"[PUB]   {symbol}: ❌ no active bearish 4H OBs found")
             return None
 
         pat = bearish_pattern(prev, last)
@@ -171,6 +206,8 @@ def detect_1h_signal(symbol: str):
         sl = recent_swing_high + atr_1h * SL_BUFFER_ATR
         risk = sl - price
         if risk <= 0 or risk / price > MAX_SL_PCT:
+            print(f"[PUB]   {symbol}: ❌ SL invalid "
+                  f"(risk={risk:.4f}, {risk/price*100:.2f}% vs max {MAX_SL_PCT*100:.1f}%)")
             return None
 
         tp1 = price - risk * TP1_RR
@@ -186,7 +223,11 @@ def detect_1h_signal(symbol: str):
             "1H bearish FVG":         fvg_present,
             "1H bearish close":       bearish_close,
         }
-        if sum(1 for v in confluences.values() if v) < REQUIRED_CONFLUENCES:
+        score = sum(1 for v in confluences.values() if v)
+        print(f"[PUB]   {symbol}: confluences {score}/{len(confluences)} — "
+              + ", ".join(f"{k}={'✅' if v else '❌'}" for k, v in confluences.items()))
+        if score < REQUIRED_CONFLUENCES:
+            print(f"[PUB]   {symbol}: ❌ insufficient confluences ({score} < {REQUIRED_CONFLUENCES})")
             return None
 
         swing_highs, swing_lows = find_swings(candles_1h, left=2, right=2)
@@ -265,7 +306,16 @@ def _save_journal(journal):
         print(f"[JOURNAL] ❌ save error: {e}")
 
 
-def record_signal(sig, channel_name: str) -> str:
+def record_signal(sig, channel_name: str,
+                  message_id=None, channel_id: str = "") -> str:
+    """Record a fired signal in the journal.
+
+    message_id  — Telegram message_id returned by sendPhoto/sendMessage.
+                  Stored so we can reply to the original signal message when
+                  SL/TP is hit.
+    channel_id  — Telegram chat_id of the channel where the signal was posted
+                  (e.g. '@AlphaDXBcrypto' or '-1003795059124').
+    """
     journal = _load_journal()
     record = {
         "id":            str(uuid.uuid4()),
@@ -273,6 +323,8 @@ def record_signal(sig, channel_name: str) -> str:
         "coin":          sig["symbol"],
         "direction":     sig["direction"],
         "channel":       channel_name,
+        "channel_id":    channel_id,      # Telegram chat_id for reply
+        "message_id":    message_id,      # Telegram message_id for reply
         "timeframe":     sig.get("timeframe", "4H"),
         "entry":         sig["entry"],
         "sl":            sig["sl"],
@@ -285,12 +337,75 @@ def record_signal(sig, channel_name: str) -> str:
     }
     journal["signals"].append(record)
     _save_journal(journal)
-    print(f"[JOURNAL] recorded {record['coin']} {record['direction']} @ ${record['entry']:,.2f}")
+    print(f"[JOURNAL] recorded {record['coin']} {record['direction']} @ ${record['entry']:,.2f} "
+          f"(msg_id={message_id}, channel={channel_id or channel_name})")
     return record["id"]
 
 
-def update_open_signals() -> None:
-    """Walk all open signals, fetch recent price action, update status if SL/TP hit."""
+# ---------- Outcome reply helpers ----------
+
+def _post_outcome_reply(telegram_token: str, sig: dict) -> None:
+    """Send a reply to the original signal message with the outcome.
+
+    Only fires if we have both channel_id and message_id stored in the journal.
+    Older journal entries (before this feature) will simply be skipped.
+    """
+    channel_id = sig.get("channel_id", "")
+    message_id = sig.get("message_id")
+    if not channel_id or not message_id:
+        print(f"[JOURNAL] ℹ️ No message_id/channel_id for {sig['coin']} — skipping reply")
+        return
+
+    coin = sig["coin"].replace("USDT", "")
+    status = sig["status"]
+    rr = sig.get("rr_achieved", 0)
+
+    if status == "tp1_hit":
+        text = (
+            f"✅ <b>TP1 Hit — {coin}/USDT</b>\n"
+            f"Partial profit secured! 🎯\n"
+            f"R:R achieved: <b>+{rr:.2f}R</b>\n\n"
+            f"▶️ Recommended: move SL to entry (breakeven) and let TP2 run.\n"
+            f"🇦🇪 AlphaDXB"
+        )
+    elif status == "tp2_hit":
+        text = (
+            f"🎯 <b>TP2 Hit — {coin}/USDT</b>\n"
+            f"Full target reached! Excellent trade! 🏆\n"
+            f"R:R achieved: <b>+{rr:.2f}R</b>\n\n"
+            f"Trade closed. Well done for following the plan. 💪\n"
+            f"🇦🇪 AlphaDXB"
+        )
+    elif status == "sl_hit":
+        text = (
+            f"❌ <b>Stop Loss Hit — {coin}/USDT</b>\n"
+            f"Setup invalidated. Loss: −1R\n\n"
+            f"Stay disciplined — protect capital and move on. "
+            f"One loss doesn't define the week. 💪\n"
+            f"🇦🇪 AlphaDXB"
+        )
+    elif status == "expired":
+        text = (
+            f"⌛ <b>Signal Expired — {coin}/USDT</b>\n"
+            f"Setup did not trigger within {EXPIRE_HOURS}h. No trade taken.\n"
+            f"🇦🇪 AlphaDXB"
+        )
+    else:
+        return  # unknown status, nothing to post
+
+    ok = send_reply(telegram_token, channel_id, message_id, text)
+    if ok:
+        print(f"[JOURNAL] ✅ Reply sent for {coin} {status}")
+    else:
+        print(f"[JOURNAL] ❌ Reply failed for {coin} {status}")
+
+
+def update_open_signals(telegram_token: str = "") -> None:
+    """Walk all open signals, fetch recent price action, update status if SL/TP hit.
+
+    When a signal's status changes, sends a reply to the original signal message
+    in Telegram. Pass telegram_token to enable reply notifications.
+    """
     journal = _load_journal()
     if not journal.get("signals"):
         return
@@ -300,6 +415,9 @@ def update_open_signals() -> None:
     # Cache klines per coin so we don't hit the API repeatedly
     klines_cache = {}
 
+    # Collect signals that just changed status in this run
+    newly_closed = []
+
     for sig in journal["signals"]:
         if sig["status"] != "open":
             continue
@@ -308,6 +426,7 @@ def update_open_signals() -> None:
             sig["status"] = "expired"
             sig["outcome_time"] = now_ts
             changed = True
+            newly_closed.append(sig)
             continue
 
         coin = sig["coin"]
@@ -331,6 +450,7 @@ def update_open_signals() -> None:
                     sig["outcome_price"] = sig["sl"]
                     sig["rr_achieved"] = -1.0
                     changed = True
+                    newly_closed.append(sig)
                     break
                 if c["high"] >= sig["tp2"]:
                     sig["status"] = "tp2_hit"
@@ -338,6 +458,7 @@ def update_open_signals() -> None:
                     sig["outcome_price"] = sig["tp2"]
                     sig["rr_achieved"] = (sig["tp2"] - sig["entry"]) / max(1e-9, (sig["entry"] - sig["sl"]))
                     changed = True
+                    newly_closed.append(sig)
                     break
                 if c["high"] >= sig["tp1"]:
                     sig["status"] = "tp1_hit"
@@ -345,6 +466,7 @@ def update_open_signals() -> None:
                     sig["outcome_price"] = sig["tp1"]
                     sig["rr_achieved"] = (sig["tp1"] - sig["entry"]) / max(1e-9, (sig["entry"] - sig["sl"]))
                     changed = True
+                    newly_closed.append(sig)
                     break
             else:  # SHORT
                 if c["high"] >= sig["sl"]:
@@ -353,6 +475,7 @@ def update_open_signals() -> None:
                     sig["outcome_price"] = sig["sl"]
                     sig["rr_achieved"] = -1.0
                     changed = True
+                    newly_closed.append(sig)
                     break
                 if c["low"] <= sig["tp2"]:
                     sig["status"] = "tp2_hit"
@@ -360,6 +483,7 @@ def update_open_signals() -> None:
                     sig["outcome_price"] = sig["tp2"]
                     sig["rr_achieved"] = (sig["entry"] - sig["tp2"]) / max(1e-9, (sig["sl"] - sig["entry"]))
                     changed = True
+                    newly_closed.append(sig)
                     break
                 if c["low"] <= sig["tp1"]:
                     sig["status"] = "tp1_hit"
@@ -367,11 +491,20 @@ def update_open_signals() -> None:
                     sig["outcome_price"] = sig["tp1"]
                     sig["rr_achieved"] = (sig["entry"] - sig["tp1"]) / max(1e-9, (sig["sl"] - sig["entry"]))
                     changed = True
+                    newly_closed.append(sig)
                     break
 
     if changed:
         _save_journal(journal)
         print("[JOURNAL] open signals updated")
+
+    # Send outcome replies AFTER saving journal (so even if replies fail, journal is safe)
+    if telegram_token and newly_closed:
+        for sig in newly_closed:
+            try:
+                _post_outcome_reply(telegram_token, sig)
+            except Exception as e:
+                print(f"[JOURNAL] ❌ Reply error for {sig['coin']}: {e}")
 
 
 # ---------- Weekly performance report ----------
@@ -477,21 +610,23 @@ def scan_and_post(telegram_token: str, public_channel: str) -> None:
             print(f"[PUB]   {coin}: detect error: {e}")
             continue
         if not sig:
-            print(f"[PUB]   {coin}: no setup")
-            continue
+            continue  # detect_1h_signal already printed the reason
 
-        print(f"[PUB]   {coin}: {sig['direction']} @ ${sig['price']:,.2f}")
+        print(f"[PUB]   {coin}: ✅ {sig['direction']} @ ${sig['price']:,.2f}")
         caption = format_public_signal(sig)
+        message_id = None
         try:
             chart = build_signal_chart(sig)
-            _send_photo(telegram_token, public_channel, chart, caption)
+            message_id = _send_photo(telegram_token, public_channel, chart, caption)
         except Exception as e:
             print(f"[PUB]   {coin}: chart failed: {e} — text only")
-            _send(telegram_token, public_channel, caption)
+            message_id = _send(telegram_token, public_channel, caption)
 
-        # Record so the journal can track outcome
+        # Record in journal with message_id so we can reply when SL/TP hits
         try:
-            record_signal(sig, "public")
+            record_signal(sig, "public",
+                          message_id=message_id,
+                          channel_id=public_channel)
         except Exception as e:
             print(f"[PUB]   {coin}: journal error: {e}")
 
