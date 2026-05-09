@@ -570,8 +570,20 @@ if __name__ == "__main__":
 
     # ----- VIP swing-signal scanner (4H setups → VIP only) -----
     def _vip_scan():
+        # Callback that journals each VIP signal with its Telegram message_id.
+        # This runs in the same thread as scan_and_post, after each signal posts.
+        def _on_vip_posted(sig, message_id, channel):
+            try:
+                public_signals.record_signal(
+                    sig, "vip",
+                    message_id=message_id,
+                    channel_id=channel,
+                )
+            except Exception as e:
+                print(f"[VIP] journal callback error: {e}")
+
         _safe("vip_scan", lambda: vip_signals.scan_and_post(
-            TELEGRAM_TOKEN, VIP_CHANNEL))
+            TELEGRAM_TOKEN, VIP_CHANNEL, on_posted=_on_vip_posted))
 
     schedule.every().hour.do(_vip_scan)
     threading.Timer(60.0, _vip_scan).start()  # one run 60s after startup
@@ -586,7 +598,8 @@ if __name__ == "__main__":
 
     # ----- Open-signal tracker — runs every 30 min to update SL/TP outcomes -----
     def _journal_check():
-        _safe("journal_check", public_signals.update_open_signals)
+        # Pass TELEGRAM_TOKEN so the tracker can reply to original signal messages
+        _safe("journal_check", lambda: public_signals.update_open_signals(TELEGRAM_TOKEN))
 
     schedule.every(30).minutes.do(_journal_check)
     threading.Timer(180.0, _journal_check).start()
