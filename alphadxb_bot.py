@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 
 # VIP signal engine — all swing-trade logic lives in this separate file
 import vip_signals
+# Public-channel short-term (1H) signal engine + journal + weekly report
+import public_signals
 
 # Auto-load values from a ".env" file in the same folder, if it exists.
 try:
@@ -566,23 +568,38 @@ if __name__ == "__main__":
     schedule.every().day.at("04:00").do(lambda: _safe("morning_update", morning_update))
     schedule.every().day.at("16:00").do(lambda: _safe("evening_update", evening_update))
 
-    # VIP swing-signal scanner — logic lives in vip_signals.py.
-    # Currently posts ONLY to VIP. When ready to advertise on the public
-    # channel, swap the call below with the commented-out one.
+    # ----- VIP swing-signal scanner (4H setups → VIP only) -----
     def _vip_scan():
         _safe("vip_scan", lambda: vip_signals.scan_and_post(
             TELEGRAM_TOKEN, VIP_CHANNEL))
-        # _safe("vip_scan", lambda: vip_signals.scan_and_post(
-        #     TELEGRAM_TOKEN, VIP_CHANNEL,
-        #     public_channel=PUBLIC_CHANNEL,
-        #     vip_link=VIP_LINK,
-        # ))
 
     schedule.every().hour.do(_vip_scan)
-    threading.Timer(60.0, _vip_scan).start()  # also run once 60s after startup
+    threading.Timer(60.0, _vip_scan).start()  # one run 60s after startup
 
-    # Heartbeat every 6 hours so the log shows the process is alive even when
-    # nothing else is happening.
+    # ----- Public 1H short-term scanner (full signals → PUBLIC) -----
+    def _public_scan():
+        _safe("public_scan", lambda: public_signals.scan_and_post(
+            TELEGRAM_TOKEN, PUBLIC_CHANNEL))
+
+    schedule.every().hour.do(_public_scan)
+    threading.Timer(120.0, _public_scan).start()  # one run 2 min after startup
+
+    # ----- Open-signal tracker — runs every 30 min to update SL/TP outcomes -----
+    def _journal_check():
+        _safe("journal_check", public_signals.update_open_signals)
+
+    schedule.every(30).minutes.do(_journal_check)
+    threading.Timer(180.0, _journal_check).start()
+
+    # ----- Weekly performance report — Sunday 18:00 UTC (~22:00 Dubai) -----
+    def _weekly_report():
+        _safe("weekly_report", lambda: public_signals.weekly_report(
+            TELEGRAM_TOKEN, PUBLIC_CHANNEL,
+            admin_token=ADMIN_BOT_TOKEN, admin_id=ADMIN_CHAT_ID))
+
+    schedule.every().sunday.at("18:00").do(_weekly_report)
+
+    # ----- Heartbeat in logs so we can see the process is alive -----
     schedule.every(6).hours.do(lambda: print(
         f"💓 Heartbeat {datetime.now().strftime('%Y-%m-%d %H:%M')}"))
 
