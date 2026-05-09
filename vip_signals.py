@@ -15,6 +15,7 @@ mitigation+pattern, FVG, R:R ≥ 1:2). Result: fewer signals, far higher quality
 
 Public API:
     scan_and_post(telegram_token: str, vip_channel: str) -> None
+    send_reply(token, channel, reply_to_message_id, text) -> bool
 """
 
 import json
@@ -59,7 +60,8 @@ REQUIRED_CONFLUENCES = 4  # of 5 (HTF, OB, mitigation+pattern, FVG, R:R)
 
 # ---------- Telegram (with retry) ----------
 
-def _send(token: str, channel: str, text: str, retries: int = 3) -> bool:
+def _send(token: str, channel: str, text: str, retries: int = 3):
+    """Send a Telegram message. Returns message_id (int) on success, None on failure."""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": channel, "text": text, "parse_mode": "HTML"}
     for attempt in range(1, retries + 1):
@@ -67,19 +69,20 @@ def _send(token: str, channel: str, text: str, retries: int = 3) -> bool:
             r = requests.post(url, json=payload, timeout=10)
             print(f"[VIP] Send attempt {attempt}: {r.status_code}")
             if r.status_code == 200:
-                return True
+                return r.json().get("result", {}).get("message_id")
             if 400 <= r.status_code < 500:
                 print(f"[VIP]   Body: {r.text[:200]} (4xx — not retrying)")
-                return False
+                return None
         except Exception as e:
             print(f"[VIP] ❌ Send error attempt {attempt}: {e}")
         time.sleep(2 ** attempt)
-    return False
+    return None
 
 
 def _send_photo(token: str, channel: str, photo_bytes: bytes, caption: str,
-                retries: int = 3) -> bool:
-    """Post a photo with caption to Telegram. Falls back to text-only on failure."""
+                retries: int = 3):
+    """Post a photo with caption. Returns message_id (int) on success, None on failure.
+    Falls back to text-only if photo upload fails."""
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
     for attempt in range(1, retries + 1):
         try:
@@ -91,7 +94,7 @@ def _send_photo(token: str, channel: str, photo_bytes: bytes, caption: str,
             )
             print(f"[VIP] Photo attempt {attempt}: {r.status_code}")
             if r.status_code == 200:
-                return True
+                return r.json().get("result", {}).get("message_id")
             if 400 <= r.status_code < 500:
                 print(f"[VIP]   Photo 4xx body: {r.text[:200]} → falling back to text")
                 return _send(token, channel, caption)
@@ -100,6 +103,35 @@ def _send_photo(token: str, channel: str, photo_bytes: bytes, caption: str,
         time.sleep(2 ** attempt)
     print("[VIP] ⚠️ Photo retries exhausted → text fallback")
     return _send(token, channel, caption)
+
+
+def send_reply(token: str, channel: str, reply_to_message_id: int, text: str,
+               retries: int = 3) -> bool:
+    """Reply to a specific message in a Telegram channel/group.
+
+    Used by the journal tracker to notify when TP/SL is hit.
+    Returns True on success, False on failure.
+    """
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": channel,
+        "text": text,
+        "parse_mode": "HTML",
+        "reply_to_message_id": reply_to_message_id,
+    }
+    for attempt in range(1, retries + 1):
+        try:
+            r = requests.post(url, json=payload, timeout=10)
+            print(f"[REPLY] Attempt {attempt}: {r.status_code}")
+            if r.status_code == 200:
+                return True
+            if 400 <= r.status_code < 500:
+                print(f"[REPLY] 4xx: {r.text[:200]}")
+                return False
+        except Exception as e:
+            print(f"[REPLY] ❌ Error attempt {attempt}: {e}")
+        time.sleep(2 ** attempt)
+    return False
 
 
 # ---------- Market data (KuCoin, no US block) ----------
@@ -412,19 +444,31 @@ def detect_signal(symbol: str):
     candles_ltf = get_klines(symbol, LTF_INTERVAL, LTF_LIMIT)
     candles_htf = get_klines(symbol, HTF_INTERVAL, HTF_LIMIT)
     if not candles_ltf or len(candles_ltf) < 60:
+        print(f"[VIP]   {symbol}: ❌ not enough LTF candles "
+              f"({len(candles_ltf) if candles_ltf else 0})")
         return None
     if not candles_htf or len(candles_htf) < 30:
+        print(f"[VIP]   {symbol}: ❌ not enough HTF candles "
+              f"({len(candles_htf) if candles_htf else 0})")
         return None
 
     bias = htf_bias(candles_htf)
     if bias == "neutral":
-        return None  # no clear HTF direction → skip
+        # Extra detail: show last two swing highs/lows so we can debug structure
+        highs, lows = find_swings(candles_htf, left=2, right=2)
+        print(f"[VIP]   {symbol}: ❌ HTF bias neutral "
+              f"(swings found — highs:{len(highs)}, lows:{len(lows)})")
+        return None
+
+    print(f"[VIP]   {symbol}: HTF bias={bias}")
 
     atr = calc_atr(candles_ltf)
     if atr is None or atr <= 0:
+        print(f"[VIP]   {symbol}: ❌ ATR calculation failed")
         return None
 
     obs = find_order_blocks(candles_ltf, atr)
+    print(f"[VIP]   {symbol}: found {len(obs)} valid OB(s) on {LTF_INTERVAL}")
 
     last  = candles_ltf[-1]
     prev  = candles_ltf[-2]
@@ -433,12 +477,20 @@ def detect_signal(symbol: str):
     # ---- LONG side ----
     if bias == "bullish":
         bull_obs = [ob for ob in obs if ob["type"] == "bullish"]
+        print(f"[VIP]   {symbol}: bullish OBs={len(bull_obs)}, price=${price:,.2f}")
         active_ob = None
         for ob in sorted(bull_obs, key=lambda x: x["index"], reverse=True):
             if ob["low"] <= price <= ob["high"] * 1.005:
                 active_ob = ob
                 break
         if not active_ob:
+            if bull_obs:
+                nearest = sorted(bull_obs, key=lambda x: abs((x["low"]+x["high"])/2 - price))
+                ob0 = nearest[0]
+                print(f"[VIP]   {symbol}: ❌ price not in any bullish OB "
+                      f"(nearest OB: ${ob0['low']:,.2f}–${ob0['high']:,.2f})")
+            else:
+                print(f"[VIP]   {symbol}: ❌ no active bullish OBs found")
             return None
 
         pat = bullish_pattern(prev, last)
@@ -451,8 +503,10 @@ def detect_signal(symbol: str):
         sl   = active_ob["low"] - atr * SL_BUFFER_ATR
         risk = price - sl
         if risk <= 0:
+            print(f"[VIP]   {symbol}: ❌ risk <= 0")
             return None
         if risk / price > MAX_SL_PCT:
+            print(f"[VIP]   {symbol}: ❌ SL too wide ({risk/price*100:.2f}% > {MAX_SL_PCT*100:.0f}%)")
             return None
 
         targets = liquidity_targets(candles_ltf, "LONG")
@@ -468,7 +522,10 @@ def detect_signal(symbol: str):
             "R:R ≥ 1:2": tp1 / price >= 1 + (MIN_RR_TP1 * risk / price) - 1e-9,
         }
         score = sum(1 for v in confluences.values() if v)
+        print(f"[VIP]   {symbol}: confluences {score}/{len(confluences)} — "
+              + ", ".join(f"{k}={'✅' if v else '❌'}" for k, v in confluences.items()))
         if score < REQUIRED_CONFLUENCES:
+            print(f"[VIP]   {symbol}: ❌ insufficient confluences ({score} < {REQUIRED_CONFLUENCES})")
             return None
 
         swing_highs, swing_lows = find_swings(candles_ltf, left=2, right=2)
@@ -493,12 +550,20 @@ def detect_signal(symbol: str):
     # ---- SHORT side ----
     if bias == "bearish":
         bear_obs = [ob for ob in obs if ob["type"] == "bearish"]
+        print(f"[VIP]   {symbol}: bearish OBs={len(bear_obs)}, price=${price:,.2f}")
         active_ob = None
         for ob in sorted(bear_obs, key=lambda x: x["index"], reverse=True):
             if ob["low"] * 0.995 <= price <= ob["high"]:
                 active_ob = ob
                 break
         if not active_ob:
+            if bear_obs:
+                nearest = sorted(bear_obs, key=lambda x: abs((x["low"]+x["high"])/2 - price))
+                ob0 = nearest[0]
+                print(f"[VIP]   {symbol}: ❌ price not in any bearish OB "
+                      f"(nearest OB: ${ob0['low']:,.2f}–${ob0['high']:,.2f})")
+            else:
+                print(f"[VIP]   {symbol}: ❌ no active bearish OBs found")
             return None
 
         pat = bearish_pattern(prev, last)
@@ -511,8 +576,10 @@ def detect_signal(symbol: str):
         sl   = active_ob["high"] + atr * SL_BUFFER_ATR
         risk = sl - price
         if risk <= 0:
+            print(f"[VIP]   {symbol}: ❌ risk <= 0")
             return None
         if risk / price > MAX_SL_PCT:
+            print(f"[VIP]   {symbol}: ❌ SL too wide ({risk/price*100:.2f}% > {MAX_SL_PCT*100:.0f}%)")
             return None
 
         targets = liquidity_targets(candles_ltf, "SHORT")
@@ -528,7 +595,10 @@ def detect_signal(symbol: str):
             "R:R ≥ 1:2": (price - tp1) / price >= MIN_RR_TP1 * (risk / price) - 1e-9,
         }
         score = sum(1 for v in confluences.values() if v)
+        print(f"[VIP]   {symbol}: confluences {score}/{len(confluences)} — "
+              + ", ".join(f"{k}={'✅' if v else '❌'}" for k, v in confluences.items()))
         if score < REQUIRED_CONFLUENCES:
+            print(f"[VIP]   {symbol}: ❌ insufficient confluences ({score} < {REQUIRED_CONFLUENCES})")
             return None
 
         swing_highs, swing_lows = find_swings(candles_ltf, left=2, right=2)
@@ -887,10 +957,12 @@ def send_test_signal(telegram_token: str, vip_channel: str, symbol: str = "BTCUS
 # ---------- Public entry point ----------
 
 def scan_and_post(telegram_token: str, vip_channel: str,
-                  public_channel: str = "", vip_link: str = "") -> None:
+                  public_channel: str = "", vip_link: str = "",
+                  on_posted=None) -> None:
     """Scan for setups. When one fires:
        - full chart + caption → vip_channel
        - teaser chart + teaser caption → public_channel (if provided)
+       - on_posted(sig, message_id, channel) called if provided, for journaling
     """
     state  = _load_state()
     now_ts = datetime.now().timestamp()
@@ -908,20 +980,27 @@ def scan_and_post(telegram_token: str, vip_channel: str,
             print(f"[VIP]   {coin}: detect error: {e}")
             continue
         if not sig:
-            print(f"[VIP]   {coin}: no setup")
-            continue
+            continue  # detect_signal already printed the reason
 
-        print(f"[VIP]   {coin}: {sig['direction']} @ ${sig['price']:,.2f} "
+        print(f"[VIP]   {coin}: ✅ {sig['direction']} @ ${sig['price']:,.2f} "
               f"(OB ${sig['ob_zone'][0]:,.2f}–${sig['ob_zone'][1]:,.2f})")
 
         # 1) Full signal → VIP
         vip_caption = format_signal_message(sig)
+        message_id = None
         try:
             vip_chart = build_signal_chart(sig)
-            _send_photo(telegram_token, vip_channel, vip_chart, vip_caption)
+            message_id = _send_photo(telegram_token, vip_channel, vip_chart, vip_caption)
         except Exception as e:
             print(f"[VIP]   {coin}: VIP chart build failed: {e} — text only")
-            _send(telegram_token, vip_channel, vip_caption)
+            message_id = _send(telegram_token, vip_channel, vip_caption)
+
+        # Notify caller (alphadxb_bot) so it can journal the signal with message_id
+        if on_posted and message_id:
+            try:
+                on_posted(sig, message_id, vip_channel)
+            except Exception as e:
+                print(f"[VIP]   {coin}: on_posted callback error: {e}")
 
         # 2) Teaser → public (if a public channel was provided)
         if public_channel:
