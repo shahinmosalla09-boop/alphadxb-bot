@@ -214,53 +214,53 @@ def find_levels(ohlc):
 
 
 def create_chart(ohlc, supports, resistances) -> bytes:
-    plt.style.use('dark_background')
+    plt.style.use('default')
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), gridspec_kw={'height_ratios': [3, 1]})
-    fig.patch.set_facecolor('#0d1117')
-    ax1.set_facecolor('#0d1117')
-    ax2.set_facecolor('#0d1117')
+    fig.patch.set_facecolor('white')
+    ax1.set_facecolor('white')
+    ax2.set_facecolor('white')
     closes = [c["close"] for c in ohlc]
     opens = [c["open"] for c in ohlc]
     highs = [c["high"] for c in ohlc]
     lows = [c["low"] for c in ohlc]
     volumes = [c["volume"] for c in ohlc]
     for i in range(len(ohlc)):
-        color = '#26a69a' if closes[i] >= opens[i] else '#ef5350'
+        color = '#16a085' if closes[i] >= opens[i] else '#e74c3c'
         ax1.plot([i, i], [lows[i], highs[i]], color=color, linewidth=0.8)
         ax1.bar(i, abs(closes[i] - opens[i]), bottom=min(opens[i], closes[i]), color=color, width=0.6, alpha=0.9)
     for i, s in enumerate(supports):
-        ax1.axhline(y=s, color='#00ff88', linewidth=1.5, linestyle='--', alpha=0.8)
-        ax1.text(len(ohlc) + 1, s, f'S{i+1}: ${s:,.0f}', color='#00ff88', fontsize=8, fontweight='bold', va='center')
+        ax1.axhline(y=s, color='#16a085', linewidth=1.5, linestyle='--', alpha=0.8)
+        ax1.text(len(ohlc) + 1, s, f'S{i+1}: ${s:,.0f}', color='#16a085', fontsize=8, fontweight='bold', va='center')
     for i, r in enumerate(resistances):
-        ax1.axhline(y=r, color='#ff4444', linewidth=1.5, linestyle='--', alpha=0.8)
-        ax1.text(len(ohlc) + 1, r, f'R{i+1}: ${r:,.0f}', color='#ff4444', fontsize=8, fontweight='bold', va='center')
-    ax1.set_title('AlphaDXB | BTC/USDT - 4H', color='#FFD700', fontsize=14, fontweight='bold', pad=15)
+        ax1.axhline(y=r, color='#e74c3c', linewidth=1.5, linestyle='--', alpha=0.8)
+        ax1.text(len(ohlc) + 1, r, f'R{i+1}: ${r:,.0f}', color='#e74c3c', fontsize=8, fontweight='bold', va='center')
+    ax1.set_title('AlphaDXB | BTC/USDT - 4H', color='#1a1a2e', fontsize=14, fontweight='bold', pad=15)
     ax1.set_xlim(-1, len(ohlc) + 10)
-    ax1.grid(color='#1e2d3d', linewidth=0.5, alpha=0.5)
-    ax1.tick_params(colors='#8b949e', labelsize=8)
+    ax1.grid(color='#e0e0e0', linewidth=0.5, alpha=0.8)
+    ax1.tick_params(colors='#333333', labelsize=8)
     ax1.set_xticks([])
     ax1.yaxis.tick_right()
     for s in ['top', 'left']:
         ax1.spines[s].set_visible(False)
     for s in ['bottom', 'right']:
-        ax1.spines[s].set_color('#30363d')
+        ax1.spines[s].set_color('#cccccc')
     for i in range(len(ohlc)):
-        color = '#26a69a' if closes[i] >= opens[i] else '#ef5350'
+        color = '#16a085' if closes[i] >= opens[i] else '#e74c3c'
         ax2.bar(i, volumes[i], color=color, width=0.6, alpha=0.6)
     ax2.set_xlim(-1, len(ohlc) + 10)
-    ax2.tick_params(colors='#8b949e', labelsize=7)
+    ax2.tick_params(colors='#333333', labelsize=7)
     ax2.set_xticks([])
     ax2.yaxis.tick_right()
-    ax2.grid(color='#1e2d3d', linewidth=0.5, alpha=0.5)
+    ax2.grid(color='#e0e0e0', linewidth=0.5, alpha=0.8)
     for s in ['top', 'left']:
         ax2.spines[s].set_visible(False)
     for s in ['bottom', 'right']:
-        ax2.spines[s].set_color('#30363d')
-    fig.text(0.5, 0.5, 'AlphaDXB', fontsize=40, color='white', alpha=0.04,
+        ax2.spines[s].set_color('#cccccc')
+    fig.text(0.5, 0.5, 'AlphaDXB', fontsize=40, color='black', alpha=0.04,
              ha='center', va='center', fontweight='bold', rotation=30)
     plt.tight_layout(pad=2)
     buf = BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='#0d1117')
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
     buf.seek(0)
     plt.close()
     return buf.read()
