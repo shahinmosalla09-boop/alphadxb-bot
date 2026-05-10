@@ -41,7 +41,7 @@ from vip_signals import (
     _send,
     _send_photo,
 )
-from public_signals import record_signal
+from public_signals import record_signal, _load_journal
 
 
 # ---------- Settings ----------
@@ -474,6 +474,21 @@ def build_scalp_chart(sig) -> bytes:
 
 # ---------- Scan + post ----------
 
+def _has_open_signal(coin: str) -> bool:
+    """Return True if there is already an open scalp signal for this coin in the journal."""
+    try:
+        journal = _load_journal()
+        for s in journal.get("signals", []):
+            if (s["coin"] == coin
+                    and s["status"] == "open"
+                    and s.get("channel") == SCALP_CHANNEL_NAME):
+                print(f"[SCALP]   {coin}: ⏸ open signal already in journal — skipping")
+                return True
+    except Exception as e:
+        print(f"[SCALP]   {coin}: journal check error: {e}")
+    return False
+
+
 def scan_and_post(telegram_token: str, channel: str) -> None:
     """Scan all coins for 15M scalp setups. Post chart + message, journal the signal."""
     state   = _load_state()
@@ -485,6 +500,9 @@ def scan_and_post(telegram_token: str, channel: str) -> None:
         last = state.get(coin, {}).get("timestamp", 0)
         if now_ts - last < cooldown:
             print(f"[SCALP]   {coin}: cooldown ({(now_ts - last)/3600:.1f}h)")
+            continue
+        # Skip if a scalp signal for this coin is still open (not yet SL/TP hit)
+        if _has_open_signal(coin):
             continue
         try:
             sig = detect_scalp_signal(coin)
