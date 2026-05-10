@@ -339,7 +339,7 @@ def format_scalp_signal(sig) -> str:
         f"This is not financial advice.\n"
         f"\n"
         f"🇦🇪 AlphaDXB | Dubai Crypto Signals\n"
-        f"#{coin.lower()} #scalp #SMC #priceaction #AlphaDXB"
+        f"#Signal #{coin.lower()} #scalp #SMC #priceaction #AlphaDXB"
     )
 
 
