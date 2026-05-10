@@ -196,6 +196,109 @@ def get_ohlc():
     return None
 
 
+# ---------- Morning state (shared between posts) ----------
+
+import json as _json
+
+_MORNING_STATE_FILE = "morning_state.json"
+
+def _save_morning_state(data: dict):
+    try:
+        with open(_MORNING_STATE_FILE, "w") as f:
+            _json.dump(data, f)
+    except Exception:
+        pass
+
+def _load_morning_state() -> dict:
+    try:
+        with open(_MORNING_STATE_FILE, "r") as f:
+            return _json.load(f)
+    except Exception:
+        return {}
+
+
+# ---------- SMC educational content (rotates daily) ----------
+
+_SMC_CONCEPTS = [
+    {   # Monday
+        "title": "Order Blocks (OB) 📦",
+        "body": (
+            "An Order Block is the last opposing candle before a strong impulse move.\n\n"
+            "Example: The last green candle before a sharp drop → that's a Bearish OB.\n"
+            "Institutions placed their sell orders there. Price often returns to fill remaining orders."
+        ),
+        "key": "When price revisits an OB zone and shows a reaction (wick, engulfing candle) — "
+               "that's where smart money is active. That's our entry zone."
+    },
+    {   # Tuesday
+        "title": "Fair Value Gaps (FVG) 🕳",
+        "body": (
+            "A Fair Value Gap is a 3-candle imbalance where price moved so fast it left a gap.\n\n"
+            "Look at candle 1 and candle 3 — if there's no overlap between their wicks, "
+            "that space in between is an FVG.\n"
+            "Price is magnetically drawn back to fill these gaps."
+        ),
+        "key": "FVGs act as magnets. When an FVG aligns with an Order Block — "
+               "that confluence is one of the strongest setups in SMC."
+    },
+    {   # Wednesday
+        "title": "Break of Structure (BOS) 🔨",
+        "body": (
+            "BOS happens when price breaks a previous swing high (bullish) or swing low (bearish).\n\n"
+            "In a bullish trend: each BOS above a swing high = confirmation the trend continues.\n"
+            "In a bearish trend: each BOS below a swing low = confirmation of downtrend."
+        ),
+        "key": "BOS tells you WHO is in control. Trade in the direction of BOS — "
+               "not against it. Simple but powerful."
+    },
+    {   # Thursday
+        "title": "Change of Character (CHoCH) 🔄",
+        "body": (
+            "CHoCH is the FIRST sign the trend is reversing.\n\n"
+            "In a downtrend: when price breaks ABOVE the most recent swing high for the first time — "
+            "that's a CHoCH. The bears just lost control.\n"
+            "Smart money uses CHoCH to get in early on reversals."
+        ),
+        "key": "BOS = trend continuation. CHoCH = potential reversal. "
+               "Knowing the difference saves you from fighting the wrong side."
+    },
+    {   # Friday
+        "title": "Liquidity Sweeps 💧",
+        "body": (
+            "Most retail traders place stop losses just below swing lows (for longs) "
+            "or above swing highs (for shorts).\n\n"
+            "Smart money KNOWS this. They push price into those levels to trigger stops, "
+            "collect liquidity — then reverse hard in the opposite direction."
+        ),
+        "key": "When you see a sharp wick below a key low that immediately reverses — "
+               "that's a liquidity sweep. It's not a breakdown. It's a trap. "
+               "The smart play: wait for confirmation, then enter with the reversal."
+    },
+    {   # Saturday
+        "title": "Higher Timeframe Bias 🗺",
+        "body": (
+            "Before ANY trade, ask: what is the daily/4H structure telling me?\n\n"
+            "Higher Highs + Higher Lows = Bullish bias → only take LONG setups.\n"
+            "Lower Highs + Lower Lows = Bearish bias → only take SHORT setups.\n\n"
+            "Trading against the HTF bias is like swimming against the current."
+        ),
+        "key": "At AlphaDXB, every signal is filtered through HTF bias first. "
+               "If the daily is bearish, we don't post long signals — no matter how good the 15M looks."
+    },
+    {   # Sunday
+        "title": "Risk Management — The Rule That Matters Most 🛡",
+        "body": (
+            "The best setup in the world means nothing without risk management.\n\n"
+            "Rule: Never risk more than 1–2% of your account per trade.\n\n"
+            "If you risk 1% and lose 10 trades in a row — you're down 10%. Recoverable.\n"
+            "If you risk 10% and lose 3 trades — you're down 30%. Hard to recover."
+        ),
+        "key": "Professionals don't try to win big. They try to NOT lose big. "
+               "The stop loss is not a failure — it's your insurance policy."
+    },
+]
+
+
 # ---------- Analysis ----------
 
 def find_levels(ohlc):
@@ -276,149 +379,157 @@ def morning_update():
     fg_val, fg_label = get_fear_greed()
     if not prices:
         return
-    date_str = datetime.now().strftime("%b %d, %Y")
+
     btc = prices.get("BTC", 0)
-    eth = prices.get("ETH", 0)
-    bnb = prices.get("BNB", 0)
-    sol = prices.get("SOL", 0)
+    date_str = datetime.now().strftime("%b %d, %Y")
     ohlc = get_ohlc()
-    if ohlc:
-        supports, resistances = find_levels(ohlc)
-        try:
-            chart = create_chart(ohlc, supports, resistances)
-        except Exception as e:
-            print(f"❌ Chart error: {e}")
-            chart = None
-        if fg_val < 30:
-            bias = "Extreme Fear - possible bounce"
-            scenario = (
-                f"If holds above ${supports[0]:,.0f} -> target ${resistances[0]:,.0f}\n"
-                f"If breaks ${supports[0]:,.0f} -> next ${supports[1] if len(supports) > 1 else supports[0]*0.97:,.0f}"
-            )
-        elif fg_val > 70:
-            bias = "Greed - watch for pullback"
-            scenario = (
-                f"If breaks ${resistances[0]:,.0f} -> strong move up\n"
-                f"If rejects -> pullback to ${supports[0]:,.0f}"
-            )
-        else:
-            bias = "Neutral - wait for breakout"
-            scenario = (
-                f"Break above ${resistances[0]:,.0f} -> Bullish\n"
-                f"Break below ${supports[0]:,.0f} -> Bearish"
-            )
-        caption = f"""📊 <b>AlphaDXB Morning Brief</b>
-{date_str}
 
-BTC: ${btc:,.0f}
-ETH: ${eth:,.0f}
-BNB: ${bnb:,.0f}
-SOL: ${sol:,.2f}
+    if not ohlc:
+        send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL,
+                     f"📊 <b>AlphaDXB Morning Brief</b>\n{date_str}\n\n"
+                     f"BTC: ${btc:,.0f} | Sentiment: {fg_label} ({fg_val})\n\n"
+                     f"🇦🇪 AlphaDXB | Dubai Crypto Signals\n#AlphaDXB")
+        return
 
-Sentiment: {fg_label.upper()} ({fg_val})
+    supports, resistances = find_levels(ohlc)
 
-<b>BTC 4H Analysis</b>
-Resistance: ${resistances[0]:,.0f}
-Support: ${supports[0]:,.0f}
-Bias: {bias}
+    # Pick the key level closest to current price
+    all_levels = [(s, "support") for s in supports] + [(r, "resistance") for r in resistances]
+    all_levels.sort(key=lambda x: abs(x[0] - btc))
+    key_price, key_type = all_levels[0] if all_levels else (btc * 0.97, "support")
 
-<b>Scenarios</b>
-{scenario}
+    # Count how many 4H candles touched this level (within 0.4%)
+    touches = sum(
+        1 for c in ohlc
+        if abs(c["high"] - key_price) / key_price <= 0.004
+        or abs(c["low"] - key_price) / key_price <= 0.004
+    )
+    touches = max(touches, 1)
 
-🎯 Full SMC signals available in our VIP channel.
-#crypto #bitcoin #dubai #AlphaDXB"""
-        if chart:
-            send_photo(PUBLIC_CHANNEL, chart, caption)
-        else:
-            send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, caption)
+    dist_pct = abs(btc - key_price) / btc * 100
+
+    if key_type == "support":
+        level_label = "support zone"
+        hold_target = resistances[0] if resistances else btc * 1.03
+        break_target = supports[1] if len(supports) > 1 else key_price * 0.97
+        scenario_a = f"Buyers defend ${key_price:,.0f} → push toward <b>${hold_target:,.0f}</b>"
+        scenario_b = f"Clean close below ${key_price:,.0f} → next support at <b>${break_target:,.0f}</b>"
+        position = f"BTC is sitting <b>${abs(btc - key_price):,.0f} above</b> a key {level_label}"
     else:
-        msg = f"""📊 <b>AlphaDXB Morning Brief</b>
-{date_str}
+        level_label = "resistance zone"
+        hold_target = supports[0] if supports else btc * 0.97
+        break_target = resistances[1] if len(resistances) > 1 else key_price * 1.03
+        scenario_a = f"Sellers hold ${key_price:,.0f} → pullback to <b>${hold_target:,.0f}</b>"
+        scenario_b = f"Breakout above ${key_price:,.0f} → next target <b>${break_target:,.0f}</b>"
+        position = f"BTC is approaching a key {level_label} at <b>${key_price:,.0f}</b>"
 
-BTC: ${btc:,.0f}
-ETH: ${eth:,.0f}
-BNB: ${bnb:,.0f}
-SOL: ${sol:,.2f}
+    if fg_val < 30:
+        sentiment_note = "Extreme Fear in the market — historically, this is when smart money accumulates. Stay calm."
+    elif fg_val > 70:
+        sentiment_note = "Greed is elevated — be selective. Don't chase extended moves. Wait for pullbacks to key levels."
+    else:
+        sentiment_note = "Neutral sentiment — market is undecided. Let price come to your level, don't force entries."
 
-Sentiment: {fg_label.upper()} ({fg_val})
+    caption = (
+        f"📊 <b>AlphaDXB Morning Brief — {date_str}</b>\n\n"
+        f"{position}.\n"
+        f"This level has been tested <b>{touches}x</b> in the last 60 candles — the more it's tested, the more significant it becomes.\n\n"
+        f"📍 <b>Key level today: ${key_price:,.0f}</b> ({level_label})\n"
+        f"Distance from current price: {dist_pct:.1f}%\n\n"
+        f"<b>Two scenarios to watch:</b>\n"
+        f"📈 A) {scenario_a}\n"
+        f"📉 B) {scenario_b}\n\n"
+        f"🧠 <b>Sentiment:</b> {fg_label.upper()} ({fg_val})\n"
+        f"{sentiment_note}\n\n"
+        f"🇦🇪 AlphaDXB | Dubai Crypto Signals\n"
+        f"#btc #crypto #SMC #priceaction #AlphaDXB"
+    )
 
-🎯 Full SMC signals in our VIP channel.
-#crypto #bitcoin #dubai #AlphaDXB"""
-        send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, msg)
+    # Save morning state for mid-day reference
+    _save_morning_state({
+        "btc": btc,
+        "key_price": key_price,
+        "key_type": key_type,
+        "hold_target": hold_target,
+        "break_target": break_target,
+        "timestamp": datetime.now().isoformat(),
+    })
+
+    try:
+        chart = create_chart(ohlc, supports, resistances)
+        send_photo(PUBLIC_CHANNEL, chart, caption)
+    except Exception as e:
+        print(f"❌ Chart error: {e}")
+        send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, caption)
 
 
 def midday_update():
     print(f"\n[{datetime.now().strftime('%H:%M')}] Mid-day update...")
     prices = get_prices()
-    fg_val, fg_label = get_fear_greed()
     if not prices:
         return
-    date_str = datetime.now().strftime("%b %d, %Y")
+
     btc = prices.get("BTC", 0)
-    eth = prices.get("ETH", 0)
-    sol = prices.get("SOL", 0)
-    bnb = prices.get("BNB", 0)
-
-    if fg_val < 30:
-        mood = "🔴 Fear in the market — smart money accumulates quietly."
-        tip = "Stay patient. Best entries come when others panic."
-    elif fg_val > 70:
-        mood = "🟡 Greed is high — be cautious chasing moves."
-        tip = "Wait for pullbacks to key levels before entering."
-    else:
-        mood = "🟠 Neutral sentiment — wait for a clear break of structure."
-        tip = "No setup = no trade. Patience is a position."
-
-    msg = (
-        f"☀️ <b>AlphaDXB Mid-day Check</b>\n"
-        f"{date_str}\n\n"
-        f"BTC: ${btc:,.0f}\n"
-        f"ETH: ${eth:,.0f}\n"
-        f"SOL: ${sol:,.2f}\n"
-        f"BNB: ${bnb:,.2f}\n\n"
-        f"Sentiment: {fg_label.upper()} ({fg_val})\n\n"
-        f"{mood}\n\n"
-        f"💡 <b>Trader's tip:</b>\n"
-        f"{tip}\n\n"
-        f"🇦🇪 AlphaDXB | Dubai Crypto Signals\n"
-        f"#crypto #bitcoin #dubai #AlphaDXB"
-    )
-    send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, msg)
-
-
-def latenight_update():
-    print(f"\n[{datetime.now().strftime('%H:%M')}] Late-night update...")
-    prices = get_prices()
     fg_val, fg_label = get_fear_greed()
-    if not prices:
-        return
+    state = _load_morning_state()
     date_str = datetime.now().strftime("%b %d, %Y")
-    btc = prices.get("BTC", 0)
-    eth = prices.get("ETH", 0)
-    sol = prices.get("SOL", 0)
-    bnb = prices.get("BNB", 0)
 
-    if fg_val < 30:
-        outlook = "Fear dominates — key support levels being tested. Watch for reversal signals at major OBs."
-    elif fg_val > 70:
-        outlook = "Market is greedy — extended moves often correct sharply. Protect your profits."
+    if state and state.get("key_price"):
+        key_price = state["key_price"]
+        key_type  = state["key_type"]
+        morning_btc = state.get("btc", btc)
+        move = btc - morning_btc
+        move_str = f"+${move:,.0f}" if move >= 0 else f"-${abs(move):,.0f}"
+        direction_word = "up" if move >= 0 else "down"
+
+        if key_type == "support":
+            dist = btc - key_price
+            if dist > 0:
+                level_status = (
+                    f"✅ The <b>${key_price:,.0f} support</b> we flagged this morning has held so far.\n"
+                    f"BTC is ${dist:,.0f} above it. Buyers are in control at that zone."
+                )
+                watch_next = f"Watch for a push toward <b>${state.get('hold_target', btc*1.02):,.0f}</b> if momentum continues."
+            else:
+                level_status = (
+                    f"⚠️ BTC has broken below the <b>${key_price:,.0f} support</b> we flagged.\n"
+                    f"This is a bearish sign. Next level to watch: <b>${state.get('break_target', btc*0.97):,.0f}</b>"
+                )
+                watch_next = "Look for a retest of the broken level as resistance before considering any short entries."
+        else:
+            dist = key_price - btc
+            if dist > 0:
+                level_status = (
+                    f"🔴 BTC is still <b>${dist:,.0f} below the ${key_price:,.0f} resistance</b> we flagged.\n"
+                    f"Sellers are holding that zone for now."
+                )
+                watch_next = f"If BTC breaks above <b>${key_price:,.0f}</b> with volume, target <b>${state.get('hold_target', btc*1.03):,.0f}</b>."
+            else:
+                level_status = (
+                    f"✅ BTC has broken above the <b>${key_price:,.0f} resistance</b> — bullish momentum.\n"
+                    f"New target: <b>${state.get('break_target', btc*1.03):,.0f}</b>"
+                )
+                watch_next = "Breakout traders: wait for a clean retest of the broken level as support before entry."
+
+        msg = (
+            f"☀️ <b>AlphaDXB Mid-session Update — {date_str}</b>\n\n"
+            f"BTC is now at <b>${btc:,.0f}</b> — {direction_word} {move_str} since this morning.\n\n"
+            f"{level_status}\n\n"
+            f"📌 {watch_next}\n\n"
+            f"Sentiment: {fg_label} ({fg_val})\n\n"
+            f"🇦🇪 AlphaDXB | Dubai Crypto Signals\n"
+            f"#btc #crypto #SMC #AlphaDXB"
+        )
     else:
-        outlook = "Market is consolidating. Structure is forming — tomorrow's session will be key."
+        # Fallback if no morning state
+        msg = (
+            f"☀️ <b>AlphaDXB Mid-session Update — {date_str}</b>\n\n"
+            f"BTC: <b>${btc:,.0f}</b>\n"
+            f"Sentiment: {fg_label} ({fg_val})\n\n"
+            f"Market is in price discovery mode. No clear setup yet — patience is a position.\n\n"
+            f"🇦🇪 AlphaDXB | Dubai Crypto Signals\n#AlphaDXB"
+        )
 
-    msg = (
-        f"🌙 <b>AlphaDXB Late-night Outlook</b>\n"
-        f"{date_str}\n\n"
-        f"BTC: ${btc:,.0f}\n"
-        f"ETH: ${eth:,.0f}\n"
-        f"SOL: ${sol:,.2f}\n"
-        f"BNB: ${bnb:,.2f}\n\n"
-        f"Sentiment: {fg_label.upper()} ({fg_val})\n\n"
-        f"📌 <b>Overnight outlook:</b>\n"
-        f"{outlook}\n\n"
-        f"Rest well — we'll have the morning brief ready for you. 🇦🇪\n\n"
-        f"🇦🇪 AlphaDXB | Dubai Crypto Signals\n"
-        f"#crypto #bitcoin #dubai #AlphaDXB"
-    )
     send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, msg)
 
 
@@ -428,40 +539,87 @@ def evening_update():
     fg_val, fg_label = get_fear_greed()
     if not prices:
         return
-    date_str = datetime.now().strftime("%b %d, %Y")
-    btc = prices.get("BTC", 0)
-    eth = prices.get("ETH", 0)
-    bnb = prices.get("BNB", 0)
-    sol = prices.get("SOL", 0)
 
+    btc = prices.get("BTC", 0)
+    date_str = datetime.now().strftime("%b %d, %Y")
     ohlc = get_ohlc()
-    chart = None
-    sup_str, res_str = "", ""
+    state = _load_morning_state()
+
     if ohlc:
         supports, resistances = find_levels(ohlc)
+        # Day's range from last 6 candles (~24h on 4H)
+        last_day = ohlc[-6:] if len(ohlc) >= 6 else ohlc
+        day_high = max(c["high"] for c in last_day)
+        day_low  = min(c["low"]  for c in last_day)
+        day_range = day_high - day_low
+
+        overnight_level = supports[0] if supports else btc * 0.97
+        overnight_target = resistances[0] if resistances else btc * 1.03
+
+        if fg_val < 30:
+            session_tone = "Fear is dominating — but remember, market bottoms are built in fear. Watch for structure recovery."
+        elif fg_val > 70:
+            session_tone = "Sentiment is greedy — extended positions are at risk of a sharp correction. Manage risk carefully."
+        else:
+            session_tone = "Market is balanced. Structure will decide the next direction — let it develop."
+
+        # Morning level follow-up
+        morning_recap = ""
+        if state and state.get("key_price"):
+            kp = state["key_price"]
+            kt = state["key_type"]
+            if kt == "support" and btc > kp:
+                morning_recap = f"✅ The ${kp:,.0f} support we flagged this morning held perfectly.\n"
+            elif kt == "support" and btc < kp:
+                morning_recap = f"📉 BTC broke below the ${kp:,.0f} support we called this morning.\n"
+            elif kt == "resistance" and btc < kp:
+                morning_recap = f"🔴 The ${kp:,.0f} resistance held — sellers defended it all session.\n"
+            else:
+                morning_recap = f"✅ BTC broke through the ${kp:,.0f} resistance we flagged — bullish.\n"
+
+        caption = (
+            f"🌙 <b>AlphaDXB Evening Breakdown — {date_str}</b>\n\n"
+            f"BTC closed the session at <b>${btc:,.0f}</b>\n"
+            f"Today's range: ${day_low:,.0f} → ${day_high:,.0f} (${day_range:,.0f} spread)\n\n"
+            f"{morning_recap}"
+            f"\n📌 <b>Overnight watch:</b>\n"
+            f"Key support: <b>${overnight_level:,.0f}</b>\n"
+            f"• Hold above → bias toward <b>${overnight_target:,.0f}</b>\n"
+            f"• Break below → structure weakens significantly\n\n"
+            f"🧠 {session_tone}\n\n"
+            f"🇦🇪 AlphaDXB | Dubai Crypto Signals\n"
+            f"#btc #crypto #SMC #AlphaDXB"
+        )
         try:
             chart = create_chart(ohlc, supports, resistances)
-            sup_str = f"\nSupport: ${supports[0]:,.0f}"
-            res_str = f"\nResistance: ${resistances[0]:,.0f}"
+            send_photo(PUBLIC_CHANNEL, chart, caption)
         except Exception as e:
             print(f"❌ Chart error: {e}")
-
-    caption = f"""🌙 <b>AlphaDXB Evening Wrap</b>
-{date_str}
-
-BTC: ${btc:,.0f}
-ETH: ${eth:,.0f}
-BNB: ${bnb:,.0f}
-SOL: ${sol:,.2f}
-
-Sentiment: {fg_label.upper()} ({fg_val}){res_str}{sup_str}
-
-🎯 Tomorrow's full SMC signals in our VIP channel.
-#crypto #bitcoin #dubai #AlphaDXB"""
-    if chart:
-        send_photo(PUBLIC_CHANNEL, chart, caption)
+            send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, caption)
     else:
-        send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, caption)
+        send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL,
+                     f"🌙 <b>AlphaDXB Evening Breakdown — {date_str}</b>\n\n"
+                     f"BTC: ${btc:,.0f} | Sentiment: {fg_label} ({fg_val})\n\n"
+                     f"🇦🇪 AlphaDXB | Dubai Crypto Signals\n#AlphaDXB")
+
+
+def latenight_update():
+    print(f"\n[{datetime.now().strftime('%H:%M')}] Late-night update...")
+    day_of_week = datetime.now().weekday()  # 0=Mon, 6=Sun
+    concept = _SMC_CONCEPTS[day_of_week]
+    date_str = datetime.now().strftime("%b %d, %Y")
+
+    msg = (
+        f"🎓 <b>AlphaDXB Night School — {date_str}</b>\n\n"
+        f"<b>{concept['title']}</b>\n\n"
+        f"{concept['body']}\n\n"
+        f"🔑 <b>Why it matters:</b>\n"
+        f"{concept['key']}\n\n"
+        f"Save this post — understanding this concept will change how you read charts.\n\n"
+        f"🇦🇪 AlphaDXB | Dubai Crypto Signals\n"
+        f"#SMC #education #trading #AlphaDXB"
+    )
+    send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, msg)
 
 
 # ---------- Admin bot ----------
