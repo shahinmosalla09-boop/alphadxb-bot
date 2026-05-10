@@ -285,7 +285,7 @@ def format_public_signal(sig) -> str:
 This is not financial advice. Past performance does not guarantee future results. Always do your own research and use proper risk management (1–2% per trade).
 
 🇦🇪 AlphaDXB | Dubai Crypto Signals
-#{coin.lower()} #crypto #SMC #priceaction #shortterm #AlphaDXB"""
+#Signal #{coin.lower()} #crypto #SMC #priceaction #shortterm #AlphaDXB"""
 
 
 # ---------- Signal journal ----------
