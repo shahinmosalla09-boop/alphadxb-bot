@@ -645,12 +645,12 @@ def build_signal_chart(sig) -> bytes:
     show = candles[start:end]
     ob_idx = ob_idx_global - start  # local index
 
-    plt.style.use("dark_background")
+    plt.style.use("default")
     fig, ax = plt.subplots(figsize=(13, 8))
-    fig.patch.set_facecolor("#0d1117")
-    ax.set_facecolor("#0d1117")
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
 
-    bull_clr, bear_clr = "#26a69a", "#ef5350"
+    bull_clr, bear_clr = "#16a085", "#e74c3c"
 
     # Candlesticks
     for i, c in enumerate(show):
@@ -665,7 +665,7 @@ def build_signal_chart(sig) -> bytes:
 
     # OB zone — strong color band
     ob_clr = bull_clr if direction == "LONG" else bear_clr
-    ax.axhspan(ob_low, ob_high, alpha=0.18, color=ob_clr, zorder=0)
+    ax.axhspan(ob_low, ob_high, alpha=0.12, color=ob_clr, zorder=0)
     # Mark the OB origin candle
     if 0 <= ob_idx < len(show):
         ax.scatter([ob_idx], [(ob_low + ob_high) / 2],
@@ -679,52 +679,52 @@ def build_signal_chart(sig) -> bytes:
     # FVG zone
     if sig.get("fvg_zone"):
         fvg_low, fvg_high, fvg_idx = sig["fvg_zone"]
-        ax.axhspan(fvg_low, fvg_high, alpha=0.15, color="#5eb0e8", zorder=0)
+        ax.axhspan(fvg_low, fvg_high, alpha=0.12, color="#2980b9", zorder=0)
         local = fvg_idx - start
         if 0 <= local < len(show):
             ax.text(local, fvg_high, " FVG",
-                    color="#5eb0e8", fontsize=9, fontweight="bold",
+                    color="#2980b9", fontsize=9, fontweight="bold",
                     va="bottom", ha="left")
 
     # Entry / SL / TP lines
     levels = [
-        (sig["entry"], "Entry", "#FFD700", "-",  1.6),
-        (sig["sl"],    "SL",    "#ef5350", "--", 1.6),
-        (sig["tp1"],   "TP1",   "#26a69a", "--", 1.4),
-        (sig["tp2"],   "TP2",   "#26a69a", ":",  1.2),
+        (sig["entry"], "Entry", "#f39c12", "-",  1.8),
+        (sig["sl"],    "SL",    "#e74c3c", "--", 1.6),
+        (sig["tp1"],   "TP1",   "#16a085", "--", 1.4),
+        (sig["tp2"],   "TP2",   "#16a085", ":",  1.2),
     ]
     for price_v, label, clr, ls, lw in levels:
         ax.axhline(price_v, color=clr, linewidth=lw, linestyle=ls, alpha=0.95)
         ax.text(x_right - 1, price_v, f" {label}: ${price_v:,.2f}",
                 color=clr, fontsize=9, fontweight="bold",
                 va="center", ha="right",
-                bbox=dict(boxstyle="round,pad=0.2", fc="#0d1117", ec=clr, alpha=0.9))
+                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=clr, alpha=0.9))
 
     # Title + subtitle
     arrow = "▲" if direction == "LONG" else "▼"
     ax.set_title(f"AlphaDXB | {coin}/USDT  {arrow} {direction}  —  4H SMC Setup",
-                 color="#FFD700", fontsize=14, fontweight="bold", pad=15)
+                 color="#1a1a2e", fontsize=14, fontweight="bold", pad=15)
     confluence_str = ", ".join(k for k, v in sig["confluences"].items() if v)
     ax.text(0.5, 1.005, confluence_str, transform=ax.transAxes,
-            color="#8b949e", fontsize=8, ha="center", va="bottom")
+            color="#555555", fontsize=8, ha="center", va="bottom")
 
     # Cosmetics
-    ax.grid(color="#1e2d3d", linewidth=0.5, alpha=0.5)
-    ax.tick_params(colors="#8b949e", labelsize=8)
+    ax.grid(color="#e0e0e0", linewidth=0.5, alpha=0.8)
+    ax.tick_params(colors="#333333", labelsize=8)
     ax.set_xticks([])
     ax.yaxis.tick_right()
     for s in ["top", "left"]:
         ax.spines[s].set_visible(False)
     for s in ["bottom", "right"]:
-        ax.spines[s].set_color("#30363d")
+        ax.spines[s].set_color("#cccccc")
 
     # Watermark
-    fig.text(0.5, 0.5, "AlphaDXB", fontsize=55, color="white", alpha=0.05,
+    fig.text(0.5, 0.5, "AlphaDXB", fontsize=55, color="black", alpha=0.04,
              ha="center", va="center", fontweight="bold", rotation=30)
 
     plt.tight_layout(pad=2)
     buf = BytesIO()
-    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="#0d1117")
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
     buf.seek(0)
     plt.close(fig)
     return buf.read()
@@ -747,12 +747,12 @@ def build_teaser_chart(sig) -> bytes:
     show = candles[start:n]
     ob_idx = ob_idx_global - start
 
-    plt.style.use("dark_background")
+    plt.style.use("default")
     fig, ax = plt.subplots(figsize=(13, 7.5))
-    fig.patch.set_facecolor("#0d1117")
-    ax.set_facecolor("#0d1117")
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
 
-    bull_clr, bear_clr = "#26a69a", "#ef5350"
+    bull_clr, bear_clr = "#16a085", "#e74c3c"
 
     for i, c in enumerate(show):
         clr = bull_clr if c["close"] >= c["open"] else bear_clr
@@ -766,7 +766,7 @@ def build_teaser_chart(sig) -> bytes:
 
     # OB zone — clearly highlighted
     ob_clr = bull_clr if direction == "LONG" else bear_clr
-    ax.axhspan(ob_low, ob_high, alpha=0.22, color=ob_clr, zorder=0)
+    ax.axhspan(ob_low, ob_high, alpha=0.15, color=ob_clr, zorder=0)
     if 0 <= ob_idx < len(show):
         ax.scatter([ob_idx], [(ob_low + ob_high) / 2],
                    marker="o", s=140, edgecolors=ob_clr,
@@ -774,43 +774,43 @@ def build_teaser_chart(sig) -> bytes:
     ax.text(x_right - 1, (ob_low + ob_high) / 2, " Watch zone",
             color=ob_clr, fontsize=11, fontweight="bold",
             va="center", ha="right",
-            bbox=dict(boxstyle="round,pad=0.25", fc="#0d1117", ec=ob_clr, alpha=0.9))
+            bbox=dict(boxstyle="round,pad=0.25", fc="white", ec=ob_clr, alpha=0.9))
 
     # FVG zone
     if sig.get("fvg_zone"):
         fvg_low, fvg_high, fvg_idx = sig["fvg_zone"]
-        ax.axhspan(fvg_low, fvg_high, alpha=0.15, color="#5eb0e8", zorder=0)
+        ax.axhspan(fvg_low, fvg_high, alpha=0.12, color="#2980b9", zorder=0)
         local = fvg_idx - start
         if 0 <= local < len(show):
             ax.text(local, fvg_high, " FVG",
-                    color="#5eb0e8", fontsize=9, fontweight="bold",
+                    color="#2980b9", fontsize=9, fontweight="bold",
                     va="bottom", ha="left")
 
     arrow = "▲" if direction == "LONG" else "▼"
     ax.set_title(
         f"AlphaDXB | {coin}/USDT  {arrow} {direction} bias  —  4H Price Action",
-        color="#FFD700", fontsize=14, fontweight="bold", pad=15,
+        color="#1a1a2e", fontsize=14, fontweight="bold", pad=15,
     )
     ax.text(0.5, 1.005,
             "Full Entry / SL / TP available in VIP channel",
-            transform=ax.transAxes, color="#8b949e", fontsize=9,
+            transform=ax.transAxes, color="#555555", fontsize=9,
             ha="center", va="bottom")
 
-    ax.grid(color="#1e2d3d", linewidth=0.5, alpha=0.5)
-    ax.tick_params(colors="#8b949e", labelsize=8)
+    ax.grid(color="#e0e0e0", linewidth=0.5, alpha=0.8)
+    ax.tick_params(colors="#333333", labelsize=8)
     ax.set_xticks([])
     ax.yaxis.tick_right()
     for s in ["top", "left"]:
         ax.spines[s].set_visible(False)
     for s in ["bottom", "right"]:
-        ax.spines[s].set_color("#30363d")
+        ax.spines[s].set_color("#cccccc")
 
-    fig.text(0.5, 0.5, "AlphaDXB", fontsize=55, color="white", alpha=0.05,
+    fig.text(0.5, 0.5, "AlphaDXB", fontsize=55, color="black", alpha=0.04,
              ha="center", va="center", fontweight="bold", rotation=30)
 
     plt.tight_layout(pad=2)
     buf = BytesIO()
-    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="#0d1117")
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
     buf.seek(0)
     plt.close(fig)
     return buf.read()
