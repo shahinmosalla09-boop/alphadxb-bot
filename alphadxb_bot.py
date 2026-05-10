@@ -347,6 +347,81 @@ Sentiment: {fg_label.upper()} ({fg_val})
         send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, msg)
 
 
+def midday_update():
+    print(f"\n[{datetime.now().strftime('%H:%M')}] Mid-day update...")
+    prices = get_prices()
+    fg_val, fg_label = get_fear_greed()
+    if not prices:
+        return
+    date_str = datetime.now().strftime("%b %d, %Y")
+    btc = prices.get("BTC", 0)
+    eth = prices.get("ETH", 0)
+    sol = prices.get("SOL", 0)
+    bnb = prices.get("BNB", 0)
+
+    if fg_val < 30:
+        mood = "🔴 Fear in the market — smart money accumulates quietly."
+        tip = "Stay patient. Best entries come when others panic."
+    elif fg_val > 70:
+        mood = "🟡 Greed is high — be cautious chasing moves."
+        tip = "Wait for pullbacks to key levels before entering."
+    else:
+        mood = "🟠 Neutral sentiment — wait for a clear break of structure."
+        tip = "No setup = no trade. Patience is a position."
+
+    msg = (
+        f"☀️ <b>AlphaDXB Mid-day Check</b>\n"
+        f"{date_str}\n\n"
+        f"BTC: ${btc:,.0f}\n"
+        f"ETH: ${eth:,.0f}\n"
+        f"SOL: ${sol:,.2f}\n"
+        f"BNB: ${bnb:,.2f}\n\n"
+        f"Sentiment: {fg_label.upper()} ({fg_val})\n\n"
+        f"{mood}\n\n"
+        f"💡 <b>Trader's tip:</b>\n"
+        f"{tip}\n\n"
+        f"🇦🇪 AlphaDXB | Dubai Crypto Signals\n"
+        f"#crypto #bitcoin #dubai #AlphaDXB"
+    )
+    send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, msg)
+
+
+def latenight_update():
+    print(f"\n[{datetime.now().strftime('%H:%M')}] Late-night update...")
+    prices = get_prices()
+    fg_val, fg_label = get_fear_greed()
+    if not prices:
+        return
+    date_str = datetime.now().strftime("%b %d, %Y")
+    btc = prices.get("BTC", 0)
+    eth = prices.get("ETH", 0)
+    sol = prices.get("SOL", 0)
+    bnb = prices.get("BNB", 0)
+
+    if fg_val < 30:
+        outlook = "Fear dominates — key support levels being tested. Watch for reversal signals at major OBs."
+    elif fg_val > 70:
+        outlook = "Market is greedy — extended moves often correct sharply. Protect your profits."
+    else:
+        outlook = "Market is consolidating. Structure is forming — tomorrow's session will be key."
+
+    msg = (
+        f"🌙 <b>AlphaDXB Late-night Outlook</b>\n"
+        f"{date_str}\n\n"
+        f"BTC: ${btc:,.0f}\n"
+        f"ETH: ${eth:,.0f}\n"
+        f"SOL: ${sol:,.2f}\n"
+        f"BNB: ${bnb:,.2f}\n\n"
+        f"Sentiment: {fg_label.upper()} ({fg_val})\n\n"
+        f"📌 <b>Overnight outlook:</b>\n"
+        f"{outlook}\n\n"
+        f"Rest well — we'll have the morning brief ready for you. 🇦🇪\n\n"
+        f"🇦🇪 AlphaDXB | Dubai Crypto Signals\n"
+        f"#crypto #bitcoin #dubai #AlphaDXB"
+    )
+    send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, msg)
+
+
 def evening_update():
     print(f"\n[{datetime.now().strftime('%H:%M')}] Evening update...")
     prices = get_prices()
@@ -568,7 +643,9 @@ if __name__ == "__main__":
 
     # Wrap scheduled jobs so a crash in one doesn't halt the scheduler.
     schedule.every().day.at("04:00").do(lambda: _safe("morning_update", morning_update))
+    schedule.every().day.at("08:00").do(lambda: _safe("midday_update", midday_update))    # 12:00 Dubai
     schedule.every().day.at("16:00").do(lambda: _safe("evening_update", evening_update))
+    schedule.every().day.at("18:00").do(lambda: _safe("latenight_update", latenight_update))  # 22:00 Dubai
 
     # ----- VIP swing-signal scanner (4H setups → VIP only) -----
     def _vip_scan():
