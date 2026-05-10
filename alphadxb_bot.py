@@ -796,13 +796,9 @@ if __name__ == "__main__":
     admin_thread = threading.Thread(target=run_admin_bot, daemon=True)
     admin_thread.start()
 
-    # Initial morning post on cold start, behind a try/except.
-    _safe("startup morning_update", morning_update)
-
-    # Wrap scheduled jobs so a crash in one doesn't halt the scheduler.
-    schedule.every().day.at("04:00").do(lambda: _safe("morning_update", morning_update))
-    schedule.every().day.at("08:00").do(lambda: _safe("midday_update", midday_update))    # 12:00 Dubai
-    schedule.every().day.at("16:00").do(lambda: _safe("evening_update", evening_update))
+    # ----- Scheduled content posts -----
+    # Morning / midday / evening BTC price updates removed — low added value.
+    # Night School (educational SMC concepts) stays — differentiated content.
     schedule.every().day.at("18:00").do(lambda: _safe("latenight_update", latenight_update))  # 22:00 Dubai
 
     # ----- VIP swing-signal scanner (4H setups → VIP only) -----
