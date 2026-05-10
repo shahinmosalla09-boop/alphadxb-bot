@@ -15,6 +15,8 @@ import matplotlib.pyplot as plt
 import vip_signals
 # Public-channel short-term (1H) signal engine + journal + weekly report
 import public_signals
+# Scalping engine — 15M SMC setups posted to public channel
+import scalp_signals
 
 # Auto-load values from a ".env" file in the same folder, if it exists.
 try:
@@ -595,6 +597,14 @@ if __name__ == "__main__":
 
     schedule.every().hour.do(_public_scan)
     threading.Timer(120.0, _public_scan).start()  # one run 2 min after startup
+
+    # ----- Scalping engine — 15M SMC setups → public channel -----
+    def _scalp_scan():
+        _safe("scalp_scan", lambda: scalp_signals.scan_and_post(
+            TELEGRAM_TOKEN, PUBLIC_CHANNEL))
+
+    schedule.every(30).minutes.do(_scalp_scan)
+    threading.Timer(90.0, _scalp_scan).start()   # first run 90s after startup
 
     # ----- Open-signal tracker — runs every 30 min to update SL/TP outcomes -----
     def _journal_check():
