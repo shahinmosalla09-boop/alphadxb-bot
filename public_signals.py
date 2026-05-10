@@ -431,8 +431,8 @@ def update_open_signals(telegram_token: str = "") -> None:
 
         coin = sig["coin"]
         if coin not in klines_cache:
-            # 5-minute candles, recent ~16h window
-            klines_cache[coin] = get_klines(coin, "5m", 200)
+            # 15-minute candles, recent ~5 day window (500 candles × 15m = 125h)
+            klines_cache[coin] = get_klines(coin, "15m", 500)
         candles = klines_cache[coin]
         if not candles:
             continue
