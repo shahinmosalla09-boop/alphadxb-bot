@@ -617,7 +617,7 @@ def latenight_update():
         f"{concept['key']}\n\n"
         f"Save this post — understanding this concept will change how you read charts.\n\n"
         f"🇦🇪 AlphaDXB | Dubai Crypto Signals\n"
-        f"#SMC #education #trading #AlphaDXB"
+        f"#AlphaDXBSchool #SMC #education #trading #AlphaDXB"
     )
     send_message(TELEGRAM_TOKEN, PUBLIC_CHANNEL, msg)
 
