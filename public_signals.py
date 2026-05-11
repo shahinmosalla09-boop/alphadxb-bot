@@ -592,6 +592,21 @@ def _save_state(state):
 
 # ---------- Public scan + post ----------
 
+def _has_open_pub_signal(coin: str) -> bool:
+    """Return True if there is already an open 1H signal for this coin in the journal."""
+    try:
+        journal = _load_journal()
+        for s in journal.get("signals", []):
+            if (s["coin"] == coin
+                    and s["status"] == "open"
+                    and s.get("channel") == "public"):
+                print(f"[PUB]   {coin}: ⏸ open signal already in journal — skipping")
+                return True
+    except Exception as e:
+        print(f"[PUB]   {coin}: journal check error: {e}")
+    return False
+
+
 def scan_and_post(telegram_token: str, public_channel: str) -> None:
     """Scan for 1H setups; post any signal (with chart) to public_channel and journal it."""
     state = _load_state()
@@ -603,6 +618,8 @@ def scan_and_post(telegram_token: str, public_channel: str) -> None:
         last = state.get(coin, {}).get("timestamp", 0)
         if now_ts - last < cooldown:
             print(f"[PUB]   {coin}: cooldown ({(now_ts - last)/3600:.1f}h)")
+            continue
+        if _has_open_pub_signal(coin):
             continue
         try:
             sig = detect_1h_signal(coin)
