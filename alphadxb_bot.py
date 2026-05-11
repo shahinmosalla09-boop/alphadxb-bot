@@ -708,7 +708,41 @@ def process_update(update):
         content = content.replace("/vip", "", 1).strip()
     if content.startswith("/start"):
         send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID,
-                     "✅ Admin Bot ready!\n\nSend or forward any post.\nAdd /vip at start for VIP channel.")
+                     "✅ Admin Bot ready!\n\nSend or forward any post.\nAdd /vip at start for VIP channel.\n\n/journal — see all open signals")
+        return
+
+    if content.startswith("/journal"):
+        # Send journal summary ONLY to admin — never to public channel
+        try:
+            import json as _j
+            with open("signals_journal.json", "r") as f:
+                journal = _j.load(f)
+            signals = journal.get("signals", [])
+            if not signals:
+                send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, "📒 Journal empty — no signals yet.")
+                return
+            open_sigs   = [s for s in signals if s["status"] == "open"]
+            closed_sigs = [s for s in signals if s["status"] != "open"]
+            lines = [f"📒 <b>Signal Journal</b>\n"]
+            lines.append(f"Open: {len(open_sigs)} | Closed: {len(closed_sigs)} | Total: {len(signals)}\n")
+            if open_sigs:
+                lines.append("─── <b>OPEN</b> ───")
+                for s in open_sigs:
+                    coin = s['coin'].replace('USDT','')
+                    dt = datetime.fromtimestamp(s['timestamp']).strftime('%m/%d %H:%M')
+                    lines.append(f"• {coin} {s['direction']} @ ${s['entry']:,.2f} | SL ${s['sl']:,.2f} | TP1 ${s['tp1']:,.2f} [{dt}]")
+            if closed_sigs[-10:]:
+                lines.append("\n─── <b>LAST 10 CLOSED</b> ───")
+                for s in closed_sigs[-10:]:
+                    coin = s['coin'].replace('USDT','')
+                    status_icon = {"tp1_hit":"✅","tp2_hit":"🎯","sl_hit":"❌","expired":"⌛"}.get(s['status'],'?')
+                    rr = s.get('rr_achieved', 0)
+                    lines.append(f"{status_icon} {coin} {s['direction']} | {s['status']} | {rr:+.2f}R")
+            send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, "\n".join(lines))
+        except FileNotFoundError:
+            send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, "📒 Journal file not found yet.")
+        except Exception as e:
+            send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"❌ Journal error: {e}")
         return
     if file_id:
         try:
