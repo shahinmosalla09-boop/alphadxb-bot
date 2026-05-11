@@ -956,6 +956,24 @@ def send_test_signal(telegram_token: str, vip_channel: str, symbol: str = "BTCUS
 
 # ---------- Public entry point ----------
 
+_JOURNAL_FILE = "signals_journal.json"
+
+def _has_open_vip_signal(coin: str) -> bool:
+    """Return True if there is already an open VIP signal for this coin in the journal."""
+    try:
+        with open(_JOURNAL_FILE, "r") as f:
+            journal = json.load(f)
+        for s in journal.get("signals", []):
+            if (s["coin"] == coin
+                    and s["status"] == "open"
+                    and s.get("channel") == "vip"):
+                print(f"[VIP]   {coin}: ⏸ open signal already in journal — skipping")
+                return True
+    except Exception as e:
+        print(f"[VIP]   {coin}: journal check error: {e}")
+    return False
+
+
 def scan_and_post(telegram_token: str, vip_channel: str,
                   public_channel: str = "", vip_link: str = "",
                   on_posted=None) -> None:
@@ -973,6 +991,8 @@ def scan_and_post(telegram_token: str, vip_channel: str,
         last = state.get(coin, {}).get("timestamp", 0)
         if now_ts - last < cooldown:
             print(f"[VIP]   {coin}: cooldown ({(now_ts - last)/3600:.1f}h)")
+            continue
+        if _has_open_vip_signal(coin):
             continue
         try:
             sig = detect_signal(coin)
