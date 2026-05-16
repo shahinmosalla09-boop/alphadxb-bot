@@ -827,6 +827,15 @@ def _safe(label: str, fn):
 
 if __name__ == "__main__":
     print("AlphaDXB Bot Starting...")
+
+    # Configure Telegram journal backup (admin bot → admin chat)
+    public_signals.configure_journal_backup(ADMIN_BOT_TOKEN, str(ADMIN_CHAT_ID))
+
+    # Restore journal from Telegram on every startup — survives Railway redeploys
+    print("[STARTUP] Restoring journal from Telegram backup...")
+    _safe("journal_restore", lambda: public_signals.restore_journal_from_telegram(
+        ADMIN_BOT_TOKEN, str(ADMIN_CHAT_ID)))
+
     admin_thread = threading.Thread(target=run_admin_bot, daemon=True)
     admin_thread.start()
 
