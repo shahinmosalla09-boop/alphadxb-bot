@@ -36,9 +36,11 @@ COINS            = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
 COOLDOWN_HOURS   = 12
 SIGNAL_STATE_FILE = "signal_state.json"
 
-HTF_INTERVAL     = "1d"
+HTF_INTERVAL     = "1d"    # daily bias — entry direction
+WTF_INTERVAL     = "1w"    # weekly bias — must align with daily for swing trades
 LTF_INTERVAL     = "4h"
 HTF_LIMIT        = 100
+WTF_LIMIT        = 52      # 1 year of weekly candles
 LTF_LIMIT        = 250
 
 SWING_LEFT       = 3
@@ -443,6 +445,7 @@ def liquidity_targets(candles, direction: str):
 def detect_signal(symbol: str):
     candles_ltf = get_klines(symbol, LTF_INTERVAL, LTF_LIMIT)
     candles_htf = get_klines(symbol, HTF_INTERVAL, HTF_LIMIT)
+    candles_wtf = get_klines(symbol, WTF_INTERVAL, WTF_LIMIT)
     if not candles_ltf or len(candles_ltf) < 60:
         print(f"[VIP]   {symbol}: ❌ not enough LTF candles "
               f"({len(candles_ltf) if candles_ltf else 0})")
@@ -452,13 +455,22 @@ def detect_signal(symbol: str):
               f"({len(candles_htf) if candles_htf else 0})")
         return None
 
+    # Weekly bias — swing trades must align with weekly trend
+    bias_weekly = htf_bias(candles_wtf) if candles_wtf and len(candles_wtf) >= 6 else "neutral"
     bias = htf_bias(candles_htf)
+
     if bias == "neutral":
-        # Extra detail: show last two swing highs/lows so we can debug structure
         highs, lows = find_swings(candles_htf, left=2, right=2)
-        print(f"[VIP]   {symbol}: ❌ HTF bias neutral "
+        print(f"[VIP]   {symbol}: ❌ Daily bias neutral "
               f"(swings found — highs:{len(highs)}, lows:{len(lows)})")
         return None
+
+    # Daily and Weekly must agree — no swing trading against the weekly trend
+    if bias_weekly != "neutral" and bias != bias_weekly:
+        print(f"[VIP]   {symbol}: ❌ Trend conflict — Daily={bias}, Weekly={bias_weekly} — no swing against weekly trend")
+        return None
+
+    print(f"[VIP]   {symbol}: Daily={bias} Weekly={bias_weekly} ✅")
 
     print(f"[VIP]   {symbol}: HTF bias={bias}")
 
@@ -480,7 +492,12 @@ def detect_signal(symbol: str):
         print(f"[VIP]   {symbol}: bullish OBs={len(bull_obs)}, price=${price:,.2f}")
         active_ob = None
         for ob in sorted(bull_obs, key=lambda x: x["index"], reverse=True):
-            if ob["low"] <= price <= ob["high"] * 1.005:
+            if ob["low"] <= price <= ob["high"]:
+                # Fresh touch check: prev candle was NOT inside OB (first entry into zone)
+                prev_in_ob = ob["low"] <= prev["close"] <= ob["high"]
+                if prev_in_ob:
+                    print(f"[VIP]   {symbol}: ⚠️ OB already being tested (prev candle inside) — skip stale entry")
+                    continue
                 active_ob = ob
                 break
         if not active_ob:
@@ -494,8 +511,7 @@ def detect_signal(symbol: str):
             return None
 
         pat = bullish_pattern(prev, last)
-        green_close = last["close"] > last["open"] and last["close"] > prev["close"]
-        reaction = pat is not None or green_close
+        reaction = pat is not None  # require real pattern — no weak "green close"
 
         fvg = has_recent_fvg(candles_ltf, "bullish", lookback=10)
         fvg_zone = latest_fvg_zone(candles_ltf, "bullish", lookback=10)
@@ -553,7 +569,12 @@ def detect_signal(symbol: str):
         print(f"[VIP]   {symbol}: bearish OBs={len(bear_obs)}, price=${price:,.2f}")
         active_ob = None
         for ob in sorted(bear_obs, key=lambda x: x["index"], reverse=True):
-            if ob["low"] * 0.995 <= price <= ob["high"]:
+            if ob["low"] <= price <= ob["high"]:
+                # Fresh touch check: prev candle was NOT inside OB
+                prev_in_ob = ob["low"] <= prev["close"] <= ob["high"]
+                if prev_in_ob:
+                    print(f"[VIP]   {symbol}: ⚠️ OB already being tested (prev candle inside) — skip stale entry")
+                    continue
                 active_ob = ob
                 break
         if not active_ob:
@@ -567,8 +588,7 @@ def detect_signal(symbol: str):
             return None
 
         pat = bearish_pattern(prev, last)
-        red_close = last["close"] < last["open"] and last["close"] < prev["close"]
-        reaction = pat is not None or red_close
+        reaction = pat is not None  # require real pattern — no weak "red close"
 
         fvg = has_recent_fvg(candles_ltf, "bearish", lookback=10)
         fvg_zone = latest_fvg_zone(candles_ltf, "bearish", lookback=10)
