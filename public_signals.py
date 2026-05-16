@@ -109,8 +109,13 @@ def detect_1h_signal(symbol: str):
         bull_obs = [ob for ob in obs_4h if ob["type"] == "bullish"]
         print(f"[PUB]   {symbol}: bullish 4H OBs={len(bull_obs)}, price=${price:,.2f}")
         active_ob = None
+        prev_4h = candles_4h[-2] if len(candles_4h) >= 2 else None
         for ob in sorted(bull_obs, key=lambda x: x["index"], reverse=True):
-            if ob["low"] * 0.995 <= price <= ob["high"] * 1.01:
+            if ob["low"] <= price <= ob["high"]:
+                # Fresh touch: prev 4H candle was outside OB (first time entering zone)
+                if prev_4h and ob["low"] <= prev_4h["close"] <= ob["high"]:
+                    print(f"[PUB]   {symbol}: ⚠️ 4H OB already being tested — skip stale entry")
+                    continue
                 active_ob = ob
                 break
         if not active_ob:
@@ -183,8 +188,13 @@ def detect_1h_signal(symbol: str):
         bear_obs = [ob for ob in obs_4h if ob["type"] == "bearish"]
         print(f"[PUB]   {symbol}: bearish 4H OBs={len(bear_obs)}, price=${price:,.2f}")
         active_ob = None
+        prev_4h = candles_4h[-2] if len(candles_4h) >= 2 else None
         for ob in sorted(bear_obs, key=lambda x: x["index"], reverse=True):
-            if ob["low"] * 0.99 <= price <= ob["high"] * 1.005:
+            if ob["low"] <= price <= ob["high"]:
+                # Fresh touch: prev 4H candle was outside OB
+                if prev_4h and ob["low"] <= prev_4h["close"] <= ob["high"]:
+                    print(f"[PUB]   {symbol}: ⚠️ 4H OB already being tested — skip stale entry")
+                    continue
                 active_ob = ob
                 break
         if not active_ob:
