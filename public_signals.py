@@ -312,55 +312,68 @@ def configure_journal_backup(token: str, chat_id: str):
 
 
 def _backup_to_telegram(journal: dict):
-    """Upload journal JSON as a document to the admin chat (silent, never raises)."""
+    """Upload journal JSON as a document to the admin chat and pin it (silent, never raises).
+
+    Pinning the message lets restore_journal_from_telegram() always find it via
+    getChat (pinned_message field) — even after Railway redeploys wipe the offset.
+    """
     if not _tg_backup_token or not _tg_backup_chat:
         return
     try:
         import io
         data = json.dumps(journal, indent=2).encode("utf-8")
-        requests.post(
+        resp = requests.post(
             f"https://api.telegram.org/bot{_tg_backup_token}/sendDocument",
             data={"chat_id": _tg_backup_chat, "caption": "📦 journal backup"},
             files={"document": ("signals_journal.json", io.BytesIO(data), "application/json")},
             timeout=15,
         )
-        print("[JOURNAL] ✅ Telegram backup saved")
+        if resp.status_code == 200:
+            msg_id = resp.json().get("result", {}).get("message_id")
+            if msg_id:
+                # Pin silently so the latest backup is always pinned
+                requests.post(
+                    f"https://api.telegram.org/bot{_tg_backup_token}/pinChatMessage",
+                    json={"chat_id": _tg_backup_chat, "message_id": msg_id,
+                          "disable_notification": True},
+                    timeout=10,
+                )
+                print(f"[JOURNAL] ✅ Telegram backup saved & pinned (msg_id={msg_id})")
     except Exception as e:
         print(f"[JOURNAL] ⚠️ Telegram backup failed: {e}")
 
 
 def restore_journal_from_telegram(token: str, chat_id: str):
-    """On startup: find last journal backup in admin chat and restore it locally."""
-    try:
-        import io
-        # Get last 50 messages from the chat, find latest document named signals_journal.json
-        r = requests.get(
-            f"https://api.telegram.org/bot{token}/getUpdates",
-            params={"limit": 100, "offset": -100},
-            timeout=15,
-        )
-        # Use getFile approach — search chat history via forwardMessages isn't available.
-        # Instead use a simpler method: bot sends to itself via sendDocument,
-        # we pull via search of recent messages in the chat.
-        # Use getChatHistory workaround: pull file_id from recent messages.
-        history_r = requests.post(
-            f"https://api.telegram.org/bot{token}/getUpdates",
-            json={"limit": 100},
-            timeout=15,
-        )
-        updates = history_r.json().get("result", []) if history_r.status_code == 200 else []
-        file_id = None
-        for upd in reversed(updates):
-            doc = upd.get("message", {}).get("document", {})
-            if doc.get("file_name") == "signals_journal.json":
-                file_id = doc.get("file_id")
-                break
+    """On startup: restore journal from the pinned message in the admin chat.
 
-        if not file_id:
-            print("[JOURNAL] ℹ️ No backup found in Telegram — starting fresh")
+    Uses getChat → pinned_message → document file_id.
+    This approach survives Railway redeploys because pinned messages are permanent.
+    """
+    try:
+        # Step 1: get the pinned message from the admin chat
+        chat_resp = requests.get(
+            f"https://api.telegram.org/bot{token}/getChat",
+            params={"chat_id": chat_id},
+            timeout=15,
+        )
+        if chat_resp.status_code != 200:
+            print(f"[JOURNAL] ⚠️ getChat failed: {chat_resp.text}")
             return
 
-        # Download the file
+        pinned = chat_resp.json().get("result", {}).get("pinned_message")
+        if not pinned:
+            print("[JOURNAL] ℹ️ No pinned message in admin chat — starting fresh")
+            return
+
+        doc = pinned.get("document", {})
+        file_id = doc.get("file_id")
+        file_name = doc.get("file_name", "")
+
+        if not file_id or file_name != "signals_journal.json":
+            print(f"[JOURNAL] ℹ️ Pinned message is not a journal backup (file={file_name!r})")
+            return
+
+        # Step 2: get the download URL
         fr = requests.get(
             f"https://api.telegram.org/bot{token}/getFile",
             params={"file_id": file_id}, timeout=10,
@@ -373,7 +386,7 @@ def restore_journal_from_telegram(token: str, chat_id: str):
         with open(JOURNAL_FILE, "w") as f:
             json.dump(journal, f, indent=2)
         sig_count = len(journal.get("signals", []))
-        print(f"[JOURNAL] ✅ Restored from Telegram backup ({sig_count} signals)")
+        print(f"[JOURNAL] ✅ Restored from pinned Telegram backup ({sig_count} signals)")
     except Exception as e:
         print(f"[JOURNAL] ⚠️ Restore failed: {e} — starting fresh")
 
