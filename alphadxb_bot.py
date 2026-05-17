@@ -750,7 +750,21 @@ def process_update(update):
     if content.startswith("/journal"):
         # Send journal summary ONLY to admin — never to public channel
         try:
-            import json as _j
+            import json as _j, os as _os
+            # If file missing, try restoring from Telegram pinned message first
+            if not _os.path.exists("signals_journal.json"):
+                send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID,
+                             "⏳ Journal file not on disk — attempting restore from Telegram backup...")
+                try:
+                    public_signals.restore_journal_from_telegram(ADMIN_BOT_TOKEN, str(ADMIN_CHAT_ID))
+                except Exception as re:
+                    send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"❌ Restore failed: {re}")
+                    return
+                if not _os.path.exists("signals_journal.json"):
+                    send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID,
+                                 "❌ Restore failed — no pinned backup found.\n"
+                                 "Send the signals_journal.json file here to reload it.")
+                    return
             with open("signals_journal.json", "r") as f:
                 journal = _j.load(f)
             signals = journal.get("signals", [])
