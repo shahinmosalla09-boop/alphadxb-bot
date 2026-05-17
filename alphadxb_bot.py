@@ -771,9 +771,22 @@ def process_update(update):
                 lines.append("\n─── <b>LAST 10 CLOSED</b> ───")
                 for s in closed_sigs[-10:]:
                     coin = s['coin'].replace('USDT','')
+                    dt = datetime.fromtimestamp(s['timestamp']).strftime('%m/%d')
                     status_icon = {"tp1_hit":"✅","tp2_hit":"🎯","sl_hit":"❌","expired":"⌛"}.get(s['status'],'?')
                     rr = s.get('rr_achieved', 0)
-                    lines.append(f"{status_icon} {coin} {s['direction']} | {s['status']} | {rr:+.2f}R")
+                    lines.append(f"{status_icon} {coin} {s['direction']} ({s.get('timeframe','?')}) {dt} → {rr:+.2f}R")
+
+            # Win rate summary
+            wins    = sum(1 for s in closed_sigs if "tp" in s["status"])
+            losses  = sum(1 for s in closed_sigs if s["status"] == "sl_hit")
+            expired = sum(1 for s in closed_sigs if s["status"] == "expired")
+            total   = wins + losses
+            net_r   = sum(s.get("rr_achieved", 0) for s in closed_sigs)
+            wr_pct  = round(wins / total * 100) if total else 0
+            lines.append(f"\n─── <b>PERFORMANCE</b> ───")
+            lines.append(f"✅ Wins: {wins}  ❌ Losses: {losses}  ⌛ Expired: {expired}")
+            lines.append(f"🎯 Win Rate: <b>{wr_pct}%</b>  ({wins}/{total})")
+            lines.append(f"📈 Net R: <b>{net_r:+.2f}R</b>")
             send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, "\n".join(lines))
         except FileNotFoundError:
             send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, "📒 Journal file not found yet.")
