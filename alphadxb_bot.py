@@ -698,11 +698,47 @@ def process_update(update):
     text = msg.get("text", "") or ""
     caption = msg.get("caption", "") or ""
     photo = msg.get("photo")
+    document = msg.get("document", {})
     forward_from_chat = msg.get("forward_from_chat")
     forward_message_id = msg.get("forward_from_message_id")
     file_id = photo[-1]["file_id"] if photo else None
     target = PUBLIC_CHANNEL
     content = caption if photo else text
+
+    # ── Admin uploads signals_journal.json → save to disk + pin it ──────────
+    if document.get("file_name") == "signals_journal.json":
+        try:
+            import json as _jj
+            doc_file_id = document["file_id"]
+            fr = requests.get(
+                f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}/getFile",
+                params={"file_id": doc_file_id}, timeout=10,
+            )
+            file_path_tg = fr.json()["result"]["file_path"]
+            content_r = requests.get(
+                f"https://api.telegram.org/file/bot{ADMIN_BOT_TOKEN}/{file_path_tg}",
+                timeout=15,
+            )
+            journal_data = content_r.json()
+            with open("signals_journal.json", "w") as f:
+                _jj.dump(journal_data, f, indent=2)
+            sig_count = len(journal_data.get("signals", []))
+            # Pin this message so future restores can find it via getChat
+            msg_id = msg.get("message_id")
+            if msg_id:
+                requests.post(
+                    f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}/pinChatMessage",
+                    json={"chat_id": ADMIN_CHAT_ID, "message_id": msg_id,
+                          "disable_notification": True},
+                    timeout=10,
+                )
+            send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID,
+                         f"✅ Journal restored! {sig_count} signals loaded & message pinned.\n"
+                         f"Now type /journal to check.")
+        except Exception as e:
+            send_message(ADMIN_BOT_TOKEN, ADMIN_CHAT_ID, f"❌ Journal restore error: {e}")
+        return
+    # ─────────────────────────────────────────────────────────────────────────
     if content.startswith("/vip"):
         target = VIP_CHANNEL
         content = content.replace("/vip", "", 1).strip()
