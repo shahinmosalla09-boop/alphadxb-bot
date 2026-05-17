@@ -41,7 +41,7 @@ from vip_signals import (
     _send,
     _send_photo,
 )
-from public_signals import record_signal, _load_journal
+# public_signals imported lazily inside functions to avoid circular import
 
 
 # ---------- Settings ----------
@@ -497,6 +497,7 @@ def build_scalp_chart(sig) -> bytes:
 def _has_open_signal(coin: str) -> bool:
     """Return True if there is already an open scalp signal for this coin in the journal."""
     try:
+        from public_signals import _load_journal
         journal = _load_journal()
         for s in journal.get("signals", []):
             if (s["coin"] == coin
@@ -545,6 +546,7 @@ def scan_and_post(telegram_token: str, channel: str) -> None:
 
         # Journal the signal for auto reply-back on SL/TP
         try:
+            from public_signals import record_signal
             record_signal(sig, SCALP_CHANNEL_NAME,
                           message_id=message_id,
                           channel_id=channel)
