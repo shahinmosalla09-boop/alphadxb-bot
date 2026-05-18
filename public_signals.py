@@ -50,16 +50,19 @@ from vip_signals import (
 
 COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
 
-COOLDOWN_HOURS  = 6        # per coin, between consecutive 1H signals
+COOLDOWN_HOURS  = 24       # per coin — 24h cooldown (was 6h; prevents duplicate same-day signals)
 JOURNAL_FILE    = "signals_journal.json"
 PUB_STATE_FILE  = "public_signal_state.json"
 
 LTF_INTERVAL    = "1h"     # entry timeframe
 HTF_INTERVAL    = "4h"     # context timeframe
+WTF_INTERVAL    = "1w"     # weekly timeframe — must align with 4H bias
 LTF_LIMIT       = 200
 HTF_LIMIT       = 150
+WTF_LIMIT       = 10       # 10 weekly candles is enough for bias
 
-MAX_SL_PCT      = 0.025    # tighter than VIP (was 5%)
+MAX_SL_PCT      = 0.025    # max SL distance (2.5% from entry)
+MIN_SL_PCT      = 0.008    # min SL distance (0.8%) — prevents hair-trigger stops like $5 on ETH
 SL_BUFFER_ATR   = 0.30     # SL = swing low/high ± (this * ATR_1H)
 TP1_RR          = 1.5
 TP2_RR          = 2.5
@@ -71,9 +74,16 @@ EXPIRE_HOURS    = 96       # mark signals as 'expired' after this if neither SL 
 # ---------- 1H signal detection ----------
 
 def detect_1h_signal(symbol: str):
-    """Look for a 1H entry inside a 4H Order Block aligned with the daily bias."""
+    """Look for a 1H entry inside a 4H Order Block aligned with BOTH weekly and 4H bias.
+
+    Key quality filters (learned from 50% → target 80%+ win rate):
+    1. Weekly bias must match 4H bias — no shorts in bull market, no longs in bear market
+    2. Minimum SL distance 0.8% — prevents hair-trigger stops
+    3. 24h cooldown per coin — prevents duplicate signals same day
+    """
     candles_1h = get_klines(symbol, LTF_INTERVAL, LTF_LIMIT)
     candles_4h = get_klines(symbol, HTF_INTERVAL, HTF_LIMIT)
+    candles_1w = get_klines(symbol, WTF_INTERVAL, WTF_LIMIT)
     if not candles_1h or len(candles_1h) < 60:
         print(f"[PUB]   {symbol}: ❌ not enough 1H candles "
               f"({len(candles_1h) if candles_1h else 0})")
@@ -90,7 +100,16 @@ def detect_1h_signal(symbol: str):
               f"(swings — highs:{len(highs)}, lows:{len(lows)})")
         return None
 
-    print(f"[PUB]   {symbol}: 4H bias={bias}")
+    # ── Weekly bias filter — #1 win-rate fix ──────────────────────────────
+    # Never send a SHORT in a bullish weekly trend, never a LONG in bearish weekly.
+    # This single rule would have prevented all 4 losing SHORT signals last week.
+    bias_weekly = "neutral"
+    if candles_1w and len(candles_1w) >= 3:
+        bias_weekly = htf_bias(candles_1w)
+    if bias_weekly != "neutral" and bias_weekly != bias:
+        print(f"[PUB]   {symbol}: ❌ 4H={bias} conflicts with Weekly={bias_weekly} — skip counter-trend signal")
+        return None
+    print(f"[PUB]   {symbol}: 4H={bias} Weekly={bias_weekly} ✅")
 
     atr_4h = calc_atr(candles_4h)
     atr_1h = calc_atr(candles_1h)
@@ -138,8 +157,12 @@ def detect_1h_signal(symbol: str):
         sl = recent_swing_low - atr_1h * SL_BUFFER_ATR
         risk = price - sl
         if risk <= 0 or risk / price > MAX_SL_PCT:
-            print(f"[PUB]   {symbol}: ❌ SL invalid "
-                  f"(risk={risk:.4f}, {risk/price*100:.2f}% vs max {MAX_SL_PCT*100:.1f}%)")
+            print(f"[PUB]   {symbol}: ❌ SL too wide "
+                  f"(risk={risk/price*100:.2f}% vs max {MAX_SL_PCT*100:.1f}%)")
+            return None
+        if risk / price < MIN_SL_PCT:
+            print(f"[PUB]   {symbol}: ❌ SL too tight "
+                  f"(risk={risk/price*100:.2f}% vs min {MIN_SL_PCT*100:.1f}%) — hair-trigger stop")
             return None
 
         tp1 = price + risk * TP1_RR
@@ -215,6 +238,10 @@ def detect_1h_signal(symbol: str):
         recent_swing_high = swings_high_1h[-1][1] if swings_high_1h else price + atr_1h * 2
         sl = recent_swing_high + atr_1h * SL_BUFFER_ATR
         risk = sl - price
+        if risk / price < MIN_SL_PCT:
+            print(f"[PUB]   {symbol}: ❌ SL too tight "
+                  f"(risk={risk/price*100:.2f}% vs min {MIN_SL_PCT*100:.1f}%) — hair-trigger stop")
+            return None
         if risk <= 0 or risk / price > MAX_SL_PCT:
             print(f"[PUB]   {symbol}: ❌ SL invalid "
                   f"(risk={risk:.4f}, {risk/price*100:.2f}% vs max {MAX_SL_PCT*100:.1f}%)")
@@ -389,6 +416,61 @@ def restore_journal_from_telegram(token: str, chat_id: str):
         print(f"[JOURNAL] ✅ Restored from pinned Telegram backup ({sig_count} signals)")
     except Exception as e:
         print(f"[JOURNAL] ⚠️ Restore failed: {e} — starting fresh")
+
+
+def weekly_journal_archive(token: str, chat_id: str) -> str:
+    """Archive current week's journal to Telegram, then reset for new week.
+
+    Called every Monday. Returns a summary string for the admin notification.
+    Old weekly archives stay in Telegram chat history forever (not pinned).
+    The pin is then reset to the fresh empty journal for the new week.
+    """
+    from datetime import datetime, timezone
+    journal = _load_journal()
+    signals = journal.get("signals", [])
+    week_label = datetime.now(timezone.utc).strftime("Week %Y-W%V")
+
+    if signals:
+        # Build stats for the archive caption
+        closed  = [s for s in signals if s["status"] != "open"]
+        wins    = sum(1 for s in closed if "tp"      in s["status"])
+        losses  = sum(1 for s in closed if s["status"] == "sl_hit")
+        expired = sum(1 for s in closed if s["status"] == "expired")
+        total   = wins + losses
+        net_r   = sum(s.get("rr_achieved", 0) for s in closed)
+        wr_pct  = round(wins / total * 100) if total else 0
+
+        caption = (
+            f"📊 <b>AlphaDXB Journal Archive — {week_label}</b>\n"
+            f"✅ Wins: {wins}  ❌ Losses: {losses}  ⌛ Expired: {expired}\n"
+            f"🎯 Win Rate: {wr_pct}%  ({wins}/{total})\n"
+            f"📈 Net R: {net_r:+.2f}R"
+        )
+        try:
+            import io as _io
+            data = json.dumps(journal, indent=2).encode("utf-8")
+            fname = f"journal_{week_label.replace(' ', '_')}.json"
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendDocument",
+                data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                files={"document": (fname, _io.BytesIO(data), "application/json")},
+                timeout=15,
+            )
+            print(f"[JOURNAL] ✅ {week_label} archived to Telegram ({len(signals)} signals)")
+        except Exception as e:
+            print(f"[JOURNAL] ⚠️ Archive upload failed: {e}")
+        summary = f"📊 {week_label} archived: {wins}W/{losses}L, {wr_pct}% WR, {net_r:+.2f}R"
+    else:
+        summary = f"📊 {week_label}: no signals to archive."
+
+    # Reset journal for new week
+    new_journal = {
+        "signals":    [],
+        "week_start": datetime.now(timezone.utc).isoformat(),
+    }
+    _save_journal(new_journal)   # also backs up (pins) the fresh empty journal
+    print(f"[JOURNAL] 🔄 New week started — journal reset.")
+    return summary
 
 
 def _load_journal():
