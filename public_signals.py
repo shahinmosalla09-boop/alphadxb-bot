@@ -24,6 +24,7 @@ Edit at the top of this file to change watched coins, cooldowns, R:R, etc.
 import json
 import time
 import uuid
+import requests
 from datetime import datetime
 
 # Reuse heavy lifters from vip_signals so we don't duplicate logic.
