@@ -51,7 +51,7 @@ from vip_signals import (
 
 COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
 
-COOLDOWN_HOURS  = 24       # per coin — 24h cooldown (was 6h; prevents duplicate same-day signals)
+COOLDOWN_HOURS  = 12       # per coin — 12h cooldown (balanced: ~10 signals/week)
 JOURNAL_FILE    = "signals_journal.json"
 PUB_STATE_FILE  = "public_signal_state.json"
 
@@ -67,7 +67,7 @@ MIN_SL_PCT      = 0.008    # min SL distance (0.8%) — prevents hair-trigger st
 SL_BUFFER_ATR   = 0.30     # SL = swing low/high ± (this * ATR_1H)
 TP1_RR          = 1.5
 TP2_RR          = 2.5
-REQUIRED_CONFLUENCES = 4   # of 5
+REQUIRED_CONFLUENCES = 3   # of 5 — balanced for ~10 signals/week, ~55-65% WR
 
 EXPIRE_HOURS    = 96       # mark signals as 'expired' after this if neither SL nor TP hit
 
