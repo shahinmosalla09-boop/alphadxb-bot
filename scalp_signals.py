@@ -46,7 +46,14 @@ from vip_signals import (
 
 # ---------- Settings ----------
 
-COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "AVAXUSDT"]
+COINS = [
+    # Tier 1 — Major
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "AVAXUSDT",
+    # Tier 2 — Active altcoins
+    "LINKUSDT", "DOTUSDT", "ADAUSDT", "ATOMUSDT", "NEARUSDT", "LTCUSDT",
+    # Tier 3 — Volatile, scalp-friendly
+    "SUIUSDT", "APTUSDT", "INJUSDT", "ARBUSDT", "OPUSDT", "TIAUSDT", "SEIUSDT",
+]
 
 LTF_INTERVAL    = "15m"    # entry timeframe
 HTF_INTERVAL    = "1h"     # LTF bias timeframe
