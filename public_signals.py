@@ -49,7 +49,14 @@ from vip_signals import (
 
 # ---------- Tweakable settings ----------
 
-COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+COINS = [
+    # Tier 1 — Major, high liquidity
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "AVAXUSDT",
+    # Tier 2 — Active altcoins, clear SMC structure
+    "LINKUSDT", "DOTUSDT", "ADAUSDT", "ATOMUSDT", "NEARUSDT", "LTCUSDT",
+    # Tier 3 — Volatile, good for OB setups
+    "SUIUSDT", "APTUSDT", "INJUSDT", "ARBUSDT", "OPUSDT",
+]
 
 COOLDOWN_HOURS  = 12       # per coin — 12h cooldown (balanced: ~10 signals/week)
 JOURNAL_FILE    = "signals_journal.json"
