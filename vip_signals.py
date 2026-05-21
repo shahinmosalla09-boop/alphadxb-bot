@@ -32,7 +32,13 @@ from matplotlib.patches import Rectangle
 
 # ---------- Tweakable settings ----------
 
-COINS            = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+COINS = [
+    # Tier 1 — always included
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+    # Tier 2 — high-liquidity alts
+    "AVAXUSDT", "LINKUSDT", "DOTUSDT", "ADAUSDT", "ATOMUSDT",
+    "NEARUSDT", "LTCUSDT", "SUIUSDT", "APTUSDT",
+]
 COOLDOWN_HOURS   = 12
 SIGNAL_STATE_FILE = "signal_state.json"
 
