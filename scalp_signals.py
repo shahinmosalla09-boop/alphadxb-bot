@@ -66,7 +66,6 @@ COOLDOWN_HOURS  = 2        # per coin between scalp signals
 STATE_FILE      = "scalp_state.json"
 
 MAX_SL_PCT      = 0.012    # 1.2% max — tight scalp stops
-MIN_SL_PCT      = 0.005    # 0.5% min — prevents hair-trigger stops like XRP $0.002 SL
 SL_BUFFER_ATR   = 0.15     # SL = OB extreme ± (0.15 × ATR_15m)
 TP1_RR          = 1.5
 TP2_RR          = 2.5
@@ -189,10 +188,6 @@ def detect_scalp_signal(symbol: str):
             print(f"[SCALP]   {symbol}: ❌ SL too wide "
                   f"({risk/price*100:.2f}% vs max {MAX_SL_PCT*100:.1f}%)")
             return None
-        if risk / price < MIN_SL_PCT:
-            print(f"[SCALP]   {symbol}: ❌ SL too tight "
-                  f"({risk/price*100:.2f}% vs min {MIN_SL_PCT*100:.1f}%) — reject")
-            return None
 
         tp1 = price + risk * TP1_RR
         tp2 = price + risk * TP2_RR
@@ -272,10 +267,6 @@ def detect_scalp_signal(symbol: str):
         if risk <= 0 or risk / price > MAX_SL_PCT:
             print(f"[SCALP]   {symbol}: ❌ SL too wide "
                   f"({risk/price*100:.2f}% vs max {MAX_SL_PCT*100:.1f}%)")
-            return None
-        if risk / price < MIN_SL_PCT:
-            print(f"[SCALP]   {symbol}: ❌ SL too tight "
-                  f"({risk/price*100:.2f}% vs min {MIN_SL_PCT*100:.1f}%) — reject")
             return None
 
         tp1 = price - risk * TP1_RR
