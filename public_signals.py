@@ -58,23 +58,20 @@ COINS = [
     "SUIUSDT", "APTUSDT", "INJUSDT", "ARBUSDT", "OPUSDT",
 ]
 
-COOLDOWN_HOURS  = 12       # per coin — 12h cooldown (balanced: ~10 signals/week)
+COOLDOWN_HOURS  = 12       # per coin — 12h cooldown
 JOURNAL_FILE    = "signals_journal.json"
 PUB_STATE_FILE  = "public_signal_state.json"
 
 LTF_INTERVAL    = "1h"     # entry timeframe
 HTF_INTERVAL    = "4h"     # context timeframe
-WTF_INTERVAL    = "1w"     # weekly timeframe — must align with 4H bias
 LTF_LIMIT       = 200
 HTF_LIMIT       = 150
-WTF_LIMIT       = 10       # 10 weekly candles is enough for bias
 
 MAX_SL_PCT      = 0.025    # max SL distance (2.5% from entry)
-MIN_SL_PCT      = 0.008    # min SL distance (0.8%) — prevents hair-trigger stops like $5 on ETH
 SL_BUFFER_ATR   = 0.30     # SL = swing low/high ± (this * ATR_1H)
 TP1_RR          = 1.5
 TP2_RR          = 2.5
-REQUIRED_CONFLUENCES = 3   # of 5 — balanced for ~10 signals/week, ~55-65% WR
+REQUIRED_CONFLUENCES = 3   # of 5
 
 EXPIRE_HOURS    = 96       # mark signals as 'expired' after this if neither SL nor TP hit
 
@@ -82,16 +79,9 @@ EXPIRE_HOURS    = 96       # mark signals as 'expired' after this if neither SL 
 # ---------- 1H signal detection ----------
 
 def detect_1h_signal(symbol: str):
-    """Look for a 1H entry inside a 4H Order Block aligned with BOTH weekly and 4H bias.
-
-    Key quality filters (learned from 50% → target 80%+ win rate):
-    1. Weekly bias must match 4H bias — no shorts in bull market, no longs in bear market
-    2. Minimum SL distance 0.8% — prevents hair-trigger stops
-    3. 24h cooldown per coin — prevents duplicate signals same day
-    """
+    """Look for a 1H entry inside a 4H Order Block aligned with the 4H bias."""
     candles_1h = get_klines(symbol, LTF_INTERVAL, LTF_LIMIT)
     candles_4h = get_klines(symbol, HTF_INTERVAL, HTF_LIMIT)
-    candles_1w = get_klines(symbol, WTF_INTERVAL, WTF_LIMIT)
     if not candles_1h or len(candles_1h) < 60:
         print(f"[PUB]   {symbol}: ❌ not enough 1H candles "
               f"({len(candles_1h) if candles_1h else 0})")
@@ -107,17 +97,7 @@ def detect_1h_signal(symbol: str):
         print(f"[PUB]   {symbol}: ❌ 4H bias neutral "
               f"(swings — highs:{len(highs)}, lows:{len(lows)})")
         return None
-
-    # ── Weekly bias filter — #1 win-rate fix ──────────────────────────────
-    # Never send a SHORT in a bullish weekly trend, never a LONG in bearish weekly.
-    # This single rule would have prevented all 4 losing SHORT signals last week.
-    bias_weekly = "neutral"
-    if candles_1w and len(candles_1w) >= 3:
-        bias_weekly = htf_bias(candles_1w)
-    if bias_weekly != "neutral" and bias_weekly != bias:
-        print(f"[PUB]   {symbol}: ❌ 4H={bias} conflicts with Weekly={bias_weekly} — skip counter-trend signal")
-        return None
-    print(f"[PUB]   {symbol}: 4H={bias} Weekly={bias_weekly} ✅")
+    print(f"[PUB]   {symbol}: 4H={bias} ✅")
 
     atr_4h = calc_atr(candles_4h)
     atr_1h = calc_atr(candles_1h)
@@ -167,10 +147,6 @@ def detect_1h_signal(symbol: str):
         if risk <= 0 or risk / price > MAX_SL_PCT:
             print(f"[PUB]   {symbol}: ❌ SL too wide "
                   f"(risk={risk/price*100:.2f}% vs max {MAX_SL_PCT*100:.1f}%)")
-            return None
-        if risk / price < MIN_SL_PCT:
-            print(f"[PUB]   {symbol}: ❌ SL too tight "
-                  f"(risk={risk/price*100:.2f}% vs min {MIN_SL_PCT*100:.1f}%) — hair-trigger stop")
             return None
 
         tp1 = price + risk * TP1_RR
@@ -246,13 +222,9 @@ def detect_1h_signal(symbol: str):
         recent_swing_high = swings_high_1h[-1][1] if swings_high_1h else price + atr_1h * 2
         sl = recent_swing_high + atr_1h * SL_BUFFER_ATR
         risk = sl - price
-        if risk / price < MIN_SL_PCT:
-            print(f"[PUB]   {symbol}: ❌ SL too tight "
-                  f"(risk={risk/price*100:.2f}% vs min {MIN_SL_PCT*100:.1f}%) — hair-trigger stop")
-            return None
         if risk <= 0 or risk / price > MAX_SL_PCT:
-            print(f"[PUB]   {symbol}: ❌ SL invalid "
-                  f"(risk={risk:.4f}, {risk/price*100:.2f}% vs max {MAX_SL_PCT*100:.1f}%)")
+            print(f"[PUB]   {symbol}: ❌ SL too wide "
+                  f"(risk={risk/price*100:.2f}% vs max {MAX_SL_PCT*100:.1f}%)")
             return None
 
         tp1 = price - risk * TP1_RR
