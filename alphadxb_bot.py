@@ -920,9 +920,19 @@ if __name__ == "__main__":
     admin_thread.start()
 
     # ----- Scheduled content posts -----
-    # Morning / midday / evening BTC price updates removed — low added value.
-    # Night School (educational SMC concepts) stays — differentiated content.
-    schedule.every().day.at("18:00").do(lambda: _safe("latenight_update", latenight_update))  # 22:00 Dubai
+    # Night School (educational SMC concepts) — 22:00 Dubai
+    schedule.every().day.at("18:00").do(lambda: _safe("latenight_update", latenight_update))
+
+    # ----- Daily journal backup — 23:00 Dubai (19:00 UTC) -----
+    # Sends ONE backup per day to admin chat (not after every signal)
+    def _daily_journal_backup():
+        try:
+            public_signals.backup_journal_now()
+            print("[JOURNAL] ✅ Daily backup sent to Telegram")
+        except Exception as e:
+            print(f"[JOURNAL] ❌ Daily backup error: {e}")
+
+    schedule.every().day.at("19:00").do(_daily_journal_backup)  # 23:00 Dubai
 
     # ----- VIP swing-signal scanner (4H setups → VIP only) -----
     def _vip_scan():
