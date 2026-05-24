@@ -460,7 +460,12 @@ def _save_journal(journal):
             json.dump(journal, f, indent=2)
     except Exception as e:
         print(f"[JOURNAL] ❌ save error: {e}")
-    # Always backup to Telegram after every save
+    # Backup is sent once per day via scheduled task — NOT after every save
+
+
+def backup_journal_now():
+    """Send journal backup to Telegram. Called once daily from alphadxb_bot scheduler."""
+    journal = _load_journal()
     _backup_to_telegram(journal)
 
 
