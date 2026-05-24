@@ -62,8 +62,9 @@ MIN_RR_TP1       = 2.0    # require TP1 ≥ 1:2 R:R, else reject the setup
 TP1_RR           = 2
 TP2_RR           = 3
 MAX_SL_PCT       = 0.05   # never accept a setup whose SL is > 5% from entry
+OB_APPROACH_PCT  = 0.02   # allow entry up to 2% outside OB zone (approaching)
 
-REQUIRED_CONFLUENCES = 4  # of 5 (HTF, OB, mitigation+pattern, FVG, R:R)
+REQUIRED_CONFLUENCES = 3  # of 5 (HTF, OB, mitigation+pattern, FVG, R:R)
 
 
 # ---------- Telegram (with retry) ----------
@@ -498,12 +499,8 @@ def detect_signal(symbol: str):
         print(f"[VIP]   {symbol}: bullish OBs={len(bull_obs)}, price=${price:,.2f}")
         active_ob = None
         for ob in sorted(bull_obs, key=lambda x: x["index"], reverse=True):
-            if ob["low"] <= price <= ob["high"]:
-                # Fresh touch check: prev candle was NOT inside OB (first entry into zone)
-                prev_in_ob = ob["low"] <= prev["close"] <= ob["high"]
-                if prev_in_ob:
-                    print(f"[VIP]   {symbol}: ⚠️ OB already being tested (prev candle inside) — skip stale entry")
-                    continue
+            # Price inside OB OR within OB_APPROACH_PCT above OB high (falling toward zone)
+            if ob["low"] <= price <= ob["high"] * (1 + OB_APPROACH_PCT):
                 active_ob = ob
                 break
         if not active_ob:
@@ -575,12 +572,8 @@ def detect_signal(symbol: str):
         print(f"[VIP]   {symbol}: bearish OBs={len(bear_obs)}, price=${price:,.2f}")
         active_ob = None
         for ob in sorted(bear_obs, key=lambda x: x["index"], reverse=True):
-            if ob["low"] <= price <= ob["high"]:
-                # Fresh touch check: prev candle was NOT inside OB
-                prev_in_ob = ob["low"] <= prev["close"] <= ob["high"]
-                if prev_in_ob:
-                    print(f"[VIP]   {symbol}: ⚠️ OB already being tested (prev candle inside) — skip stale entry")
-                    continue
+            # Price inside OB OR within OB_APPROACH_PCT below OB low (rising toward zone)
+            if ob["low"] * (1 - OB_APPROACH_PCT) <= price <= ob["high"]:
                 active_ob = ob
                 break
         if not active_ob:
