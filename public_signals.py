@@ -441,8 +441,10 @@ def weekly_journal_archive(token: str, chat_id: str) -> str:
         "signals":    [],
         "week_start": datetime.now(timezone.utc).isoformat(),
     }
-    _save_journal(new_journal)   # also backs up (pins) the fresh empty journal
-    print(f"[JOURNAL] 🔄 New week started — journal reset.")
+    _save_journal(new_journal)
+    # Pin the fresh empty journal so restores after redeploy get the new week's data
+    _backup_to_telegram(new_journal)
+    print(f"[JOURNAL] 🔄 New week started — journal reset & pinned.")
     return summary
 
 
