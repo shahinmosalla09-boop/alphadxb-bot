@@ -69,7 +69,8 @@ MAX_SL_PCT      = 0.012    # 1.2% max — tight scalp stops
 SL_BUFFER_ATR   = 0.15     # SL = OB extreme ± (0.15 × ATR_15m)
 TP1_RR          = 1.5
 TP2_RR          = 2.5
-REQUIRED_CONFLUENCES = 4   # of 5 — raised from 3; all key confluences must align
+REQUIRED_CONFLUENCES = 3   # of 5
+OB_APPROACH_PCT = 0.015    # allow entry up to 1.5% outside OB zone (approaching)
 
 SCALP_CHANNEL_NAME = "public_scalp"  # journal tag
 
@@ -161,8 +162,8 @@ def detect_scalp_signal(symbol: str):
         print(f"[SCALP]   {symbol}: bullish 15M OBs={len(bull_obs)}, price={_fmt(price)}")
         active_ob = None
         for ob in sorted(bull_obs, key=lambda x: x["index"], reverse=True):
-            # Price must be INSIDE the OB — not above it (no late entries)
-            if ob["low"] <= price <= ob["high"]:
+            # Price inside OB OR within OB_APPROACH_PCT above OB high (falling toward zone)
+            if ob["low"] <= price <= ob["high"] * (1 + OB_APPROACH_PCT):
                 active_ob = ob
                 break
         if not active_ob:
@@ -241,8 +242,8 @@ def detect_scalp_signal(symbol: str):
         print(f"[SCALP]   {symbol}: bearish 15M OBs={len(bear_obs)}, price={_fmt(price)}")
         active_ob = None
         for ob in sorted(bear_obs, key=lambda x: x["index"], reverse=True):
-            # Price must be INSIDE the OB — not below it (no late entries)
-            if ob["low"] <= price <= ob["high"]:
+            # Price inside OB OR within OB_APPROACH_PCT below OB low (rising toward zone)
+            if ob["low"] * (1 - OB_APPROACH_PCT) <= price <= ob["high"]:
                 active_ob = ob
                 break
         if not active_ob:
