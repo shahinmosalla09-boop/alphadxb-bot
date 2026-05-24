@@ -71,7 +71,8 @@ MAX_SL_PCT      = 0.025    # max SL distance (2.5% from entry)
 SL_BUFFER_ATR   = 0.30     # SL = swing low/high ± (this * ATR_1H)
 TP1_RR          = 1.5
 TP2_RR          = 2.5
-REQUIRED_CONFLUENCES = 3   # of 5
+REQUIRED_CONFLUENCES = 2   # of 5 — relaxed for more signals
+OB_APPROACH_PCT = 0.02     # allow entry up to 2% outside OB zone (approaching)
 
 EXPIRE_HOURS    = 96       # mark signals as 'expired' after this if neither SL nor TP hit
 
@@ -116,20 +117,16 @@ def detect_1h_signal(symbol: str):
         bull_obs = [ob for ob in obs_4h if ob["type"] == "bullish"]
         print(f"[PUB]   {symbol}: bullish 4H OBs={len(bull_obs)}, price=${price:,.2f}")
         active_ob = None
-        prev_4h = candles_4h[-2] if len(candles_4h) >= 2 else None
         for ob in sorted(bull_obs, key=lambda x: x["index"], reverse=True):
-            if ob["low"] <= price <= ob["high"]:
-                # Fresh touch: prev 4H candle was outside OB (first time entering zone)
-                if prev_4h and ob["low"] <= prev_4h["close"] <= ob["high"]:
-                    print(f"[PUB]   {symbol}: ⚠️ 4H OB already being tested — skip stale entry")
-                    continue
+            # Price inside OB OR within OB_APPROACH_PCT above OB high (falling toward zone)
+            if ob["low"] <= price <= ob["high"] * (1 + OB_APPROACH_PCT):
                 active_ob = ob
                 break
         if not active_ob:
             if bull_obs:
                 nearest = sorted(bull_obs, key=lambda x: abs((x["low"]+x["high"])/2 - price))
                 ob0 = nearest[0]
-                print(f"[PUB]   {symbol}: ❌ price not in any bullish 4H OB "
+                print(f"[PUB]   {symbol}: ❌ price not near any bullish 4H OB "
                       f"(nearest: ${ob0['low']:,.2f}–${ob0['high']:,.2f})")
             else:
                 print(f"[PUB]   {symbol}: ❌ no active bullish 4H OBs found")
@@ -195,20 +192,16 @@ def detect_1h_signal(symbol: str):
         bear_obs = [ob for ob in obs_4h if ob["type"] == "bearish"]
         print(f"[PUB]   {symbol}: bearish 4H OBs={len(bear_obs)}, price=${price:,.2f}")
         active_ob = None
-        prev_4h = candles_4h[-2] if len(candles_4h) >= 2 else None
         for ob in sorted(bear_obs, key=lambda x: x["index"], reverse=True):
-            if ob["low"] <= price <= ob["high"]:
-                # Fresh touch: prev 4H candle was outside OB
-                if prev_4h and ob["low"] <= prev_4h["close"] <= ob["high"]:
-                    print(f"[PUB]   {symbol}: ⚠️ 4H OB already being tested — skip stale entry")
-                    continue
+            # Price inside OB OR within OB_APPROACH_PCT below OB low (rising toward zone)
+            if ob["low"] * (1 - OB_APPROACH_PCT) <= price <= ob["high"]:
                 active_ob = ob
                 break
         if not active_ob:
             if bear_obs:
                 nearest = sorted(bear_obs, key=lambda x: abs((x["low"]+x["high"])/2 - price))
                 ob0 = nearest[0]
-                print(f"[PUB]   {symbol}: ❌ price not in any bearish 4H OB "
+                print(f"[PUB]   {symbol}: ❌ price not near any bearish 4H OB "
                       f"(nearest: ${ob0['low']:,.2f}–${ob0['high']:,.2f})")
             else:
                 print(f"[PUB]   {symbol}: ❌ no active bearish 4H OBs found")
