@@ -109,10 +109,9 @@ def _fmt(price: float) -> str:
 # ---------- Signal detection ----------
 
 def detect_scalp_signal(symbol: str):
-    """Detect a 15M scalp setup using 4H+1H bias alignment + 15M OB + FVG + real pattern."""
+    """Detect a 15M scalp setup: 1H bias + 15M OB + FVG + optional confirmation."""
     candles_15m = get_klines(symbol, LTF_INTERVAL, LTF_LIMIT)
     candles_1h  = get_klines(symbol, HTF_INTERVAL, HTF_LIMIT)
-    candles_4h  = get_klines(symbol, HTF2_INTERVAL, HTF2_LIMIT)
 
     if not candles_15m or len(candles_15m) < 60:
         print(f"[SCALP]   {symbol}: ❌ not enough 15M candles "
@@ -122,27 +121,13 @@ def detect_scalp_signal(symbol: str):
         print(f"[SCALP]   {symbol}: ❌ not enough 1H candles "
               f"({len(candles_1h) if candles_1h else 0})")
         return None
-    if not candles_4h or len(candles_4h) < 30:
-        print(f"[SCALP]   {symbol}: ❌ not enough 4H candles "
-              f"({len(candles_4h) if candles_4h else 0})")
-        return None
 
-    bias_1h = htf_bias(candles_1h)
-    bias_4h = htf_bias(candles_4h)
-
-    # Both timeframes must agree — no trading against the 4H trend
-    if bias_1h == "neutral":
+    # Only 1H bias needed — no 4H alignment required for scalp
+    bias = htf_bias(candles_1h)
+    if bias == "neutral":
         print(f"[SCALP]   {symbol}: ❌ 1H bias neutral")
         return None
-    if bias_4h == "neutral":
-        print(f"[SCALP]   {symbol}: ❌ 4H bias neutral — no scalp in ranging market")
-        return None
-    if bias_1h != bias_4h:
-        print(f"[SCALP]   {symbol}: ❌ bias conflict — 1H={bias_1h}, 4H={bias_4h} — skip")
-        return None
-
-    bias = bias_1h
-    print(f"[SCALP]   {symbol}: 1H={bias_1h} 4H={bias_4h} — aligned ✅")
+    print(f"[SCALP]   {symbol}: 1H={bias} ✅")
 
     atr_15m = calc_atr(candles_15m)
     if atr_15m is None or atr_15m <= 0:
@@ -176,12 +161,9 @@ def detect_scalp_signal(symbol: str):
                 print(f"[SCALP]   {symbol}: ❌ no active bullish 15M OBs")
             return None
 
-        pat         = bullish_pattern(prev, last)   # real pattern only (engulfing, pin bar)
+        pat         = bullish_pattern(prev, last)
         fvg_present = has_recent_fvg(candles_15m, "bullish", lookback=4)
         fvg_zone    = latest_fvg_zone(candles_15m, "bullish", lookback=8)
-        # Price in lower 60% of OB = better risk, deeper in zone
-        ob_range    = active_ob["high"] - active_ob["low"]
-        price_in_lower_ob = price <= active_ob["low"] + ob_range * 0.6
 
         sl   = active_ob["low"] - atr_15m * SL_BUFFER_ATR
         risk = price - sl
@@ -197,11 +179,10 @@ def detect_scalp_signal(symbol: str):
             tp1 = targets[0]
 
         confluences = {
-            "4H+1H bias bullish":        True,
-            "15M bullish OB active":     True,
-            "Price in lower half of OB": price_in_lower_ob,
-            "15M bullish FVG nearby":    fvg_present,
-            "15M bullish pattern":       pat is not None,
+            "1H bias bullish":        True,
+            "15M bullish OB active":  True,
+            "15M bullish FVG nearby": fvg_present,
+            "15M bullish confirmation": pat is not None,
         }
         score = sum(1 for v in confluences.values() if v)
         print(f"[SCALP]   {symbol}: confluences {score}/{len(confluences)} — "
@@ -256,12 +237,9 @@ def detect_scalp_signal(symbol: str):
                 print(f"[SCALP]   {symbol}: ❌ no active bearish 15M OBs")
             return None
 
-        pat         = bearish_pattern(prev, last)   # real pattern only (engulfing, shooting star)
+        pat         = bearish_pattern(prev, last)
         fvg_present = has_recent_fvg(candles_15m, "bearish", lookback=4)
         fvg_zone    = latest_fvg_zone(candles_15m, "bearish", lookback=8)
-        # Price in upper 60% of OB = better risk, deeper in zone
-        ob_range    = active_ob["high"] - active_ob["low"]
-        price_in_upper_ob = price >= active_ob["high"] - ob_range * 0.6
 
         sl   = active_ob["high"] + atr_15m * SL_BUFFER_ATR
         risk = sl - price
@@ -277,11 +255,10 @@ def detect_scalp_signal(symbol: str):
             tp1 = targets[0]
 
         confluences = {
-            "4H+1H bias bearish":        True,
+            "1H bias bearish":           True,
             "15M bearish OB active":     True,
-            "Price in upper half of OB": price_in_upper_ob,
             "15M bearish FVG nearby":    fvg_present,
-            "15M bearish pattern":       pat is not None,
+            "15M bearish confirmation":  pat is not None,
         }
         score = sum(1 for v in confluences.values() if v)
         print(f"[SCALP]   {symbol}: confluences {score}/{len(confluences)} — "
