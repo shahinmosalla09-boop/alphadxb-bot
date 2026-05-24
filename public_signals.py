@@ -71,7 +71,7 @@ MAX_SL_PCT      = 0.025    # max SL distance (2.5% from entry)
 SL_BUFFER_ATR   = 0.30     # SL = swing low/high ± (this * ATR_1H)
 TP1_RR          = 1.5
 TP2_RR          = 2.5
-REQUIRED_CONFLUENCES = 2   # of 5 — relaxed for more signals
+REQUIRED_CONFLUENCES = 3   # of 5 — signal fires when min 3 confluences met
 OB_APPROACH_PCT = 0.02     # allow entry up to 2% outside OB zone (approaching)
 
 EXPIRE_HOURS    = 96       # mark signals as 'expired' after this if neither SL nor TP hit
